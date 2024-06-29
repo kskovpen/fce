@@ -1,0 +1,2 @@
+p = (nbjets >= 0)
+passevent = p
