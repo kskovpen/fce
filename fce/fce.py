@@ -7,7 +7,7 @@ QSlider, QSpinBox, QStyleFactory, QTableWidget, QTabWidget, QTextEdit, QVBoxLayo
 import json, subprocess, threading, time, os, sys, py_compile, pkgutil, filecmp
 from optparse import OptionParser
 
-version = '0.0.2'
+version = '0.0.4a'
 
 os.environ['LC_ALL'] = 'en_US.UTF-8'
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'

@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='fce',
-    version='0.0.2a',
+    version='0.0.4a',
     description='Future Collider Experiment',
     url='https://github.com/kskovpen/FCE',
     author='Kirill Skovpen',
