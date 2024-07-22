@@ -1,3 +1,3 @@
 # Future Collider Experiment
 
-More info here soon.
+![](https://raw.githubusercontent.com/kskovpen/fce/master/data/fce-screen.png "FCE main screen capture")
