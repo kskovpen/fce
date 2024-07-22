@@ -7,7 +7,7 @@ QSlider, QSpinBox, QStyleFactory, QTableWidget, QTabWidget, QTextEdit, QVBoxLayo
 import json, subprocess, threading, time, os, sys, py_compile, pkgutil, filecmp
 from optparse import OptionParser
 
-version = '0.0.1c'
+version = '0.0.2'
 
 os.environ['LC_ALL'] = 'en_US.UTF-8'
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
@@ -191,9 +191,9 @@ class RunModule(threading.Thread):
         if not self.done:
             self.doskim = True
             self.useskim = False
-        print('exec python3 '+hdir+'/run.py --bins='+str(self.bins)+' --min='+str(self.min)+' --max='+str(self.max)+\
-        ' --energy=\"'+str(self.energy)+'\" --detector=\"'+str(self.detector)+'\" --target=\"'+str(self.target)+\
-        '\" --data=\"'+str(self.data)+'\" --dpi=\"'+str(self.dpi)+'\"'+(' --doskim' if self.doskim else '')+(' --useskim' if self.useskim else ''))
+#        print('exec python3 '+hdir+'/run.py --bins='+str(self.bins)+' --min='+str(self.min)+' --max='+str(self.max)+\
+#        ' --energy=\"'+str(self.energy)+'\" --detector=\"'+str(self.detector)+'\" --target=\"'+str(self.target)+\
+#        '\" --data=\"'+str(self.data)+'\" --dpi=\"'+str(self.dpi)+'\"'+(' --doskim' if self.doskim else '')+(' --useskim' if self.useskim else ''))
 #        print('useskim=', self.useskim, 'doskim=', self.doskim)
         cmd = ['exec python3 '+hdir+'/run.py --bins='+str(self.bins)+' --min='+str(self.min)+' --max='+str(self.max)+\
         ' --energy=\"'+str(self.energy)+'\" --detector=\"'+str(self.detector)+'\" --target=\"'+str(self.target)+\
