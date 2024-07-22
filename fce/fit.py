@@ -71,7 +71,7 @@ if __name__ == '__main__':
     init_pars = model.config.suggested_init()
     bkg_pars = init_pars.copy()
     bkg_pars[model.config.poi_index] = 0
-    if options.target == 'New physics': 
+    if options.target == 'New physics':
         rsig = cabinetry.fit.significance(model, data, init_pars=bkg_pars)
         res = {'bestfit': None, 'uncertainty': None, 'observed_significance': rsig.observed_significance, 'expected_significance': None}
     else:

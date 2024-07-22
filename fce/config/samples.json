@@ -1,62 +1,19 @@
 {
-    "tt": [
-        "tt_incl"
-    ],
-    "h": [
-        "h_dilep",
-        "h_h2aa",
-        "h_h2mm",
-        "h_h2tt",
-        "h_h2ww",
-        "h_h2zz",
-        "h_had",
-        "hee_h2aa",
-        "hee_h2jj",
-        "hee_h2mm",
-        "hee_h2tt",
-        "hee_h2ww",
-        "hee_h2zz",
-        "hnunu_h2aa",
-        "hnunu_h2jj",
-        "hnunu_h2mm",
-        "hnunu_h2tt",
-        "hnunu_h2ww",
-        "hnunu_h2zz"
-    ],
-    "wbwb": [
-        "wbwb_incl"
-    ],
-    "ww": [
-        "ww_dilep",
-        "ww_had",
-        "ww_semilep"
-    ],
-    "wwz": [
-        "wwz_dilep",
-        "wwz_had",
-        "wwz_lep",
-        "wwz_semilep"
-    ],
-    "z": [
-        "z_dilep",
-        "z_had",
-        "za_inv"
-    ],
-    "zh": [
-        "zh_h2aa",
-        "zh_h2jj",
-        "zh_h2mm",
-        "zh_h2tt",
-        "zh_h2ww",
-        "zh_h2zz"
-    ],
-    "zz": [
-        "zz_dilep",
-        "zz_had",
-        "zz_lep",
-        "zza_inv"
-    ],
-    "data": [
-        "data"
-    ]
+    "91": {
+        "X1": [],
+        "X2": [],
+        "X3": [],
+        "X4": [],
+        "X5": [],
+        "data": []
+    },
+    "160": {
+        "X1": [],
+        "X2": [],
+        "X3": [],
+        "X4": [],
+        "data": []
+    },
+    "240": {},
+    "365": {}
 }

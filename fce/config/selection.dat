@@ -1,2 +1,2 @@
-p = (nbjets >= 0)
+p = (njets >= 2 and nphotons >= 1)
 passevent = p

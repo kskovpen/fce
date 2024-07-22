@@ -1,1 +1,1 @@
-observable = nbjets
+observable = (jets[0].p4+jets[1].p4).m
