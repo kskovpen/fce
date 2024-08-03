@@ -8,6 +8,7 @@ from optparse import OptionParser
 import boost_histogram as bh
 import numpy as np
 import uproot
+import pandas as pd
 
 home = os.path.expanduser('~')
 hdir = home+'/.fce'
@@ -132,7 +133,8 @@ if __name__ == '__main__':
         
         if options.doskim:
             fs = uproot.recreate(skimdir+"/"+s+".root")
-            fs['ntuple'] = arrw
+            df = pd.DataFrame(arrw)
+            fs['ntuple'] = df
 
     os.system('python3 '+usersite+'/fce/plot.py --energy=\"'+options.energy+'\" --detector=\"'+options.detector+'\"'+' --dpi=\"'+str(options.dpi)+'\"')
 
