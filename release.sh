@@ -50,8 +50,10 @@ EOF
 echo "Bumped __init__.py → $VERSION"
 
 # ── Commit, tag, push ─────────────────────────────────────────────────────────
-git add __init__.py
-git commit -m "Release $VERSION"
+git add -u
+if ! git diff --cached --quiet; then
+    git commit -m "Release $VERSION"
+fi
 git tag "v$VERSION"
 git push && git push --tags
 
