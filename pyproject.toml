@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "fce"
@@ -36,9 +36,9 @@ fce = "fce_studio.__main__:main"
 [tool.setuptools.dynamic]
 version = {attr = "fce_studio.__version__"}
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["fce_studio*"]
+[tool.setuptools]
+packages = ["fce_studio", "fce_studio.ui", "fce_studio.engine"]
+package-dir = {"fce_studio" = ".", "fce_studio.ui" = "ui", "fce_studio.engine" = "engine"}
 
 [tool.setuptools.package-data]
 "fce_studio" = [
