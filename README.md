@@ -8,7 +8,7 @@ Built with [Dear PyGui](https://github.com/hoffstadt/DearPyGui), it runs nativel
 
 ## Main screen interface
 
-![FCE main screen](https://raw.githubusercontent.com/kskovpen/fce/main/fce_studio/fce-screen.png)
+![FCE main screen](https://raw.githubusercontent.com/kskovpen/fce/main/fce-screen.png)
 
 ---
 
