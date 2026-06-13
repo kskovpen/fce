@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "fce"
+dynamic = ["version"]
+description = "Future Collider Experiment Studio — HEP analysis tool for FCC-ee simulated data"
+authors = [
+    {name = "Kirill Skovpen", email = "Kirill.Skovpen@cern.ch"},
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+keywords = ["HEP", "physics", "FCC", "analysis", "dearpygui"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "dearpygui>=1.11",
+    "uproot>=5",
+    "boost-histogram>=1.4",
+    "matplotlib>=3.8",
+    "mplhep>=0.3",
+    "numpy>=1.24",
+    "vector>=1.0",
+    "pillow>=10",
+    "pyhf>=0.7",
+    "scipy>=1.11",
+]
+
+[project.scripts]
+fce = "fce_studio.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "fce_studio.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fce_studio*"]
+
+[tool.setuptools.package-data]
+"fce_studio" = [
+    "config/*.json",
+    "fce.ico",
+    "fce.svg",
+    "fce-screen.png",
+]

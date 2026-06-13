@@ -1,0 +1,2 @@
+p = (njets >= 2 and jets[0].pt > 30)
+passevent = p

@@ -1,0 +1,69 @@
+import json
+import os
+import traceback
+
+from ui.state import get_run_state, update_run_state
+safe_get_state = get_run_state
+safe_set_state = update_run_state
+
+from engine.analytical_loop import run_physics_loop
+from engine.downloader import run_dataset_download
+from engine.plotter import render_plots
+
+hdir = os.path.join(os.path.expanduser("~"), ".fce")
+
+
+def execute_analysis(cfg, _unused):
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), "config", "samples.json")
+        if not os.path.exists(config_path):
+            config_path = os.path.join(hdir, "config", "samples.json")
+        if not os.path.exists(config_path):
+            safe_set_state("running", False)
+            safe_set_state("status_msg", "Error: samples.json not found.")
+            return
+
+        with open(config_path) as f_json:
+            samples = json.load(f_json)
+
+        os.makedirs(os.path.join(hdir, "output"), exist_ok=True)
+        os.makedirs(os.path.join(hdir, "cache"),  exist_ok=True)
+
+        en = cfg["energy"].replace(" GeV", "")
+        if en not in samples:
+            safe_set_state("running", False)
+            safe_set_state("status_msg", f"Error: energy '{en}' not in samples config.")
+            return
+
+        active_samples = list(samples[en].keys())
+
+        success = run_physics_loop(cfg, samples, active_samples, en)
+        if not success or safe_get_state("stop"):
+            safe_set_state("running", False)
+            return
+
+        if safe_get_state("stop"):
+            safe_set_state("running", False)
+            return
+
+        try:
+            render_plots(cfg, samples, en)
+        except Exception as plot_err:
+            safe_set_state("status_msg", f"Plot error: {plot_err}")
+
+        # Statistical fit (if requested)
+        if cfg.get("target", "None") not in ("None", None, ""):
+            try:
+                from engine.fitter import run_fit
+                mu, sig = run_fit(cfg, samples, en)
+                safe_set_state("fit_mu",  mu)
+                safe_set_state("fit_sig", sig)
+            except Exception as fit_err:
+                safe_set_state("status_msg", f"Fit error: {fit_err}")
+
+        safe_set_state("progress", 1.0)
+        safe_set_state("running",  False)
+
+    except Exception as err:
+        safe_set_state("running",    False)
+        safe_set_state("status_msg", f"Engine error: {err}\n{traceback.format_exc()}")

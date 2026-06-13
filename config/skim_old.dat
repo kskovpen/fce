@@ -1,0 +1,2 @@
+p = (njets >= 2)
+skim = p

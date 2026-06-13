@@ -1,0 +1,18 @@
+# Data files (downloaded separately, not part of the source repo)
+datasets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Build & distribution
+dist/
+build/
+
+# Claude Code session memory
+.claude/
+
+# macOS
+.DS_Store
