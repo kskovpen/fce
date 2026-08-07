@@ -20,7 +20,9 @@ from PIL import Image
 
 from ui.graph import (link_callback, delink_callback, create_node,
                       setup_link_handlers, on_node_editor_drop,
-                      save_pipeline, load_pipeline)
+                      save_pipeline, load_pipeline,
+                      create_node_below_lowest, delete_unconnected_nodes,
+                      show_delete_unconnected_confirm)
 from ui.state import REGISTRY
 from ui.components import (trigger_analysis_pipeline, trigger_dataset_download,
                            confirm_redownload, MAX_HIST_TEXTURES,
@@ -62,6 +64,11 @@ with dpg.texture_registry():
             default_value=empty_buffer,
             tag=f"plot_texture_buffer_{_ti}",
         )
+    dpg.add_dynamic_texture(
+        width=1272, height=1100,
+        default_value=[0.1, 0.1, 0.1, 1.0] * (1272 * 1100),
+        tag="cutflow_texture_buffer",
+    )
 
     # Logo for About window
     _logo_loaded = False
@@ -107,29 +114,66 @@ _ui_state.EXTENDED_FONT = _extended_font
 _ui_state.LARGE_FONT = _large_font
 
 # ── Help popup (expression guide) ─────────────────────────────────────────────
+_HELP_EXPR_W = 560
+_HELP_EXPR_H = 580
 with dpg.window(tag="help_expr_window", label="Expression Guide",
-                modal=True, show=False, width=520, height=420,
+                modal=True, show=False, width=_HELP_EXPR_W, height=_HELP_EXPR_H,
                 no_resize=False):
-    dpg.add_text(
-        "Variables  (pt-sorted within type)\n\n"
-        "  Counts :  nlep  nel  nmu  njets  nphot\n\n"
-        "  Leptons:  l1.pt  l1.eta  l1.phi  l1.e  l1.d0  l1.z0  l1.p4\n"
-        "            l2.pt  l2.eta  l2.phi  l2.e  l2.d0  l2.z0  l2.p4\n\n"
-        "  Jets   :  j1.pt  j1.eta  j1.phi  j1.e  j1.btag  j1.p4\n"
-        "            j2.pt  j2.eta  j2.phi  j2.e  j2.btag  j2.p4\n\n"
-        "  Photons:  ph1.pt  ph1.eta  ph1.phi  ph1.e  ph1.p4\n"
-        "            ph2.pt  ph2.eta  ph2.phi  ph2.e  ph2.p4\n\n"
-        "  MET    :  met.pt  met.eta  met.phi  met.e  met.p4\n\n"
-        "4-vector arithmetic (p4 objects)\n\n"
-        "  (l1.p4 + l2.p4).mass   →  invariant mass\n"
-        "  (l1.p4 + l2.p4).pt     →  system pT\n"
-        "  l1.p4.deltaR(l2.p4)    →  ΔR\n"
-        "  deltaR(l1, l2)          →  ΔR via eta/phi\n"
-        "  l1.pt + l2.pt           →  sum pT\n\n"
-        "Operators :  > < >= <= == !=\n"
-        "Logic     :  and  or  not  ( )"
-    )
-    dpg.add_spacer(height=8)
+    with dpg.child_window(width=-1, height=-40, border=False):
+        dpg.add_text(
+            "VARIABLES  (objects pT-sorted within type)\n\n"
+            "Counts\n"
+            "  nlep   total leptons (electrons + muons)\n"
+            "  nel    number of electrons\n"
+            "  nmu    number of muons\n"
+            "  njets  number of jets\n"
+            "  nphot  number of photons\n\n"
+            "Leptons  l1, l2  [pt / e in GeV, angles in rad]\n"
+            "  .pt      transverse momentum (perpendicular to beam)\n"
+            "  .eta     pseudorapidity: detector coverage |eta|<2.5\n"
+            "  .phi     azimuthal angle in the transverse plane\n"
+            "  .e       total energy\n"
+            "  .d0      transverse impact parameter (vertex proximity)\n"
+            "  .z0      longitudinal impact parameter\n"
+            "  .charge  electric charge (+1 or -1)\n"
+            "  .flavour particle type (11 = electron, 13 = muon)\n"
+            "  .p4      4-vector for invariant mass / deltaR\n\n"
+            "Jets  j1, j2  [pt / e in GeV]\n"
+            "  .pt .eta .phi .e   kinematic variables (as above)\n"
+            "  .btag  b-tagging score [0,1]; > 0.7 selects b-jets\n\n"
+            "Photons  ph1, ph2  [pt / e in GeV]\n"
+            "  .pt .eta .phi .e   kinematic variables (as above)\n\n"
+            "MET  (missing transverse energy -- proxy for neutrinos)\n"
+            "  met.pt   magnitude of missing pT  [GeV]\n"
+            "  met.phi  direction in the transverse plane\n"
+            "  (eta / e / p4 are not defined for MET)\n\n"
+            "4-VECTOR ARITHMETIC  (use .p4 objects)\n\n"
+            "  (l1.p4 + l2.p4).mass   invariant mass of di-lepton system [GeV]\n"
+            "  (l1.p4 + l2.p4).pt     transverse momentum of the system   [GeV]\n"
+            "  (l1.p4 + l2.p4).eta    pseudorapidity of the system\n"
+            "  l1.p4.deltaR(l2.p4)    angular separation sqrt(deta^2+dphi^2)\n"
+            "  deltaR(l1, l2)          same, using object eta/phi directly\n"
+            "  l1.pt + l2.pt           scalar sum of transverse momenta    [GeV]\n"
+            "  mT(l1, met)             transverse mass  [GeV]\n\n"
+            "WORKED EXAMPLES\n\n"
+            "  l1.pt > 20 and l2.pt > 10\n"
+            "      Both leptons hard -- reduces fake-lepton backgrounds.\n\n"
+            "  (l1.p4+l2.p4).mass > 80 and (l1.p4+l2.p4).mass < 100\n"
+            "      Di-lepton mass window around the Z boson peak at ~91 GeV.\n\n"
+            "  njets >= 2 and j1.btag > 0.7\n"
+            "      2+ jets with the leading jet b-tagged (top quark searches).\n\n"
+            "  nlep >= 2 and met.pt > 30\n"
+            "      2 leptons + missing energy (W/Z + neutrino topology).\n\n"
+            "OPERATORS   > < >= <= == !=\n"
+            "LOGIC       and  or  not  ( )\n"
+            "            (also accepted: && || ! as in C++)\n\n"
+            "OBJECT LIMITS\n"
+            "  Only l1/l2, j1/j2, ph1/ph2 are available.\n"
+            "  If fewer objects are present, missing ones return -999.",
+            wrap=_HELP_EXPR_W - 24,
+        )
+    dpg.add_separator()
+    dpg.add_spacer(height=4)
     dpg.add_button(
         label="Close",
         callback=lambda: dpg.configure_item("help_expr_window", show=False),
@@ -147,6 +191,29 @@ with dpg.window(tag="redownload_confirm_window", label="Confirm Re-download",
         dpg.add_spacer(width=10)
         dpg.add_button(label="Cancel", width=80,
                        callback=lambda: dpg.configure_item("redownload_confirm_window", show=False))
+
+# ── Delete Unconnected confirmation window ────────────────────────────────────
+with dpg.window(tag="delete_unconnected_confirm_window",
+                label="Delete Unconnected Nodes",
+                modal=True, show=False, width=400, height=160, no_resize=True):
+    dpg.add_text("", tag="delete_unconnected_confirm_text", wrap=380)
+    dpg.add_spacer(height=10)
+    with dpg.group(horizontal=True):
+        dpg.add_button(
+            label="Delete",
+            tag="delete_unconnected_yes_btn",
+            callback=lambda: (
+                delete_unconnected_nodes(),
+                dpg.configure_item("delete_unconnected_confirm_window", show=False),
+            ),
+            width=100,
+        )
+        dpg.add_spacer(width=10)
+        dpg.add_button(
+            label="Cancel",
+            width=80,
+            callback=lambda: dpg.configure_item("delete_unconnected_confirm_window", show=False),
+        )
 
 # ── About window ──────────────────────────────────────────────────────────────
 with dpg.window(tag="about_window", label="About",
@@ -182,24 +249,44 @@ with dpg.window(tag="node_error_window", label="Node Error",
 
 # ── Discovery popup ──────────────────────────────────────────────────────────
 with dpg.window(tag="discovery_window", label="*** DISCOVERY ***",
-                modal=True, show=False, width=420, height=230,
+                modal=True, show=False, width=460, height=320,
                 no_resize=True):
-    dpg.add_spacer(height=10)
-    dpg.add_text("", tag="discovery_title_text", wrap=400)
-    dpg.add_spacer(height=6)
-    dpg.add_text("", tag="discovery_detail_text", wrap=400)
-    dpg.add_spacer(height=10)
+    dpg.add_spacer(height=8)
+    dpg.add_text("", tag="discovery_title_text", wrap=440)
+    dpg.add_spacer(height=4)
+    dpg.add_text("", tag="discovery_detail_text", wrap=440)
+    dpg.add_spacer(height=4)
+    dpg.add_text("", tag="discovery_hint_text", wrap=440, color=(180, 220, 180))
+    dpg.add_separator()
+    dpg.add_spacer(height=4)
+    dpg.add_text(
+        "Statistical fit terms:\n"
+        "  Signal strength (mu): ratio of observed to predicted yield.\n"
+        "    mu = 1 means perfect agreement with the Standard Model.\n"
+        "  Significance (sigma): how many s.d. above the background-only\n"
+        "    hypothesis. 5 sigma is the particle physics discovery threshold.",
+        wrap=440, color=(160, 160, 160),
+    )
+    dpg.add_spacer(height=8)
     dpg.add_text("Name this process:")
     dpg.add_input_text(tag="discovery_process_name_input", width=-1,
-                       hint="e.g. Higgs boson")
-    dpg.add_spacer(height=10)
-    dpg.add_button(
-        label="Celebrate!",
-        callback=lambda: save_discovery_process_name(
-            dpg.get_value("discovery_process_name_input")
-        ),
-        width=-1, height=32,
-    )
+                       hint="e.g. Z boson, Higgs boson")
+    dpg.add_spacer(height=8)
+    with dpg.group(horizontal=True):
+        dpg.add_button(
+            label="Confirm Name",
+            tag="discovery_confirm_btn",
+            callback=lambda: save_discovery_process_name(
+                dpg.get_value("discovery_process_name_input")
+            ),
+            width=200, height=30,
+        )
+        dpg.add_spacer(width=8)
+        dpg.add_button(
+            label="Skip",
+            callback=lambda: save_discovery_process_name(""),
+            width=100, height=30,
+        )
 
 
 # ── Window show helpers ───────────────────────────────────────────────────────
@@ -249,11 +336,118 @@ with dpg.file_dialog(
     dpg.add_file_extension("", color=(150, 150, 150, 255))
 
 
+_EXERCISES_TEXT = (
+    "Suggested exercise progression\n\n"
+    "Exercise 1 - Count leptons (Getting started)\n"
+    "  Goal  : Plot the lepton multiplicity distribution.\n"
+    "  Setup : Observable = Global > nlep, Histogram bins=6 range 0-6.\n"
+    "  Learn : How many leptons does each process typically produce?\n\n"
+    "Exercise 2 - Z boson mass peak (Resonance search)\n"
+    "  Goal  : Observe the Z boson as a peak in the di-lepton mass.\n"
+    "  Setup : Multiplicity >= 2 leptons; Observable = Vec Sum > mass\n"
+    "          (l1 + l2); Histogram bins=50 range 60-120 GeV.\n"
+    "  Learn : What is the Z boson mass? What is the peak width?\n\n"
+    "Exercise 3 - Lepton pT cut (Improving signal purity)\n"
+    "  Goal  : Reduce background by requiring hard leptons.\n"
+    "  Setup : Add Selection l1.pt > 20 and l2.pt > 10 after Multiplicity.\n"
+    "  Learn : How does the cut change the signal-to-background ratio?\n\n"
+    "Exercise 4 - Statistical fit (Discovery)\n"
+    "  Goal  : Perform a hypothesis test to claim discovery.\n"
+    "  Setup : Set Fit Signal in the Histogram node (e.g. Zee or Zmumu),\n"
+    "          then Run. Check significance and signal strength (mu).\n"
+    "  Learn : Is significance >= 5 sigma? Is mu consistent with 1?\n\n"
+    "Exercise 5 - Higher energy (Higgs search)\n"
+    "  Goal  : Search for Higgs-associated production at 240 or 365 GeV.\n"
+    "  Setup : Change Data node energy to 240 GeV; use Vec Sum mass\n"
+    "          of the two leptons or the recoil system.\n"
+    "  Learn : At what mass do you find a new excess?\n\n"
+    "Tip: Save your pipeline (File > Save Pipeline) to resume later."
+)
+
+_EXERCISES_W = 580
+_EXERCISES_H = 480
+
+
+def _show_exercises_window(sender=None, app_data=None, user_data=None):
+    if not dpg.does_item_exist("exercises_window"):
+        with dpg.window(
+            tag="exercises_window",
+            label="Suggested Exercises",
+            modal=False, show=False,
+            width=_EXERCISES_W, height=_EXERCISES_H,
+            no_resize=False, no_collapse=True,
+        ):
+            with dpg.child_window(width=-1, height=-40, border=False):
+                dpg.add_spacer(height=6)
+                dpg.add_text(_EXERCISES_TEXT, wrap=_EXERCISES_W - 24)
+            dpg.add_separator()
+            dpg.add_spacer(height=6)
+            dpg.add_button(
+                label="Close", width=90,
+                callback=lambda: dpg.configure_item("exercises_window", show=False),
+            )
+    vp_w = dpg.get_viewport_width()
+    vp_h = dpg.get_viewport_height()
+    dpg.set_item_pos("exercises_window",
+                     [(vp_w - _EXERCISES_W) // 2, (vp_h - _EXERCISES_H) // 2])
+    dpg.configure_item("exercises_window", show=True)
+    dpg.focus_item("exercises_window")
+
+
 def _show_about_window(sender=None, app_data=None, user_data=None):
     vp_w = dpg.get_viewport_width()
     vp_h = dpg.get_viewport_height()
     dpg.set_item_pos("about_window", [(vp_w - 360) // 2, (vp_h - 280) // 2])
     dpg.configure_item("about_window", show=True)
+
+
+_PALETTE_HELP_W = 520
+_PALETTE_HELP_H = 320
+
+_PALETTE_HELP_TEXT = (
+    "The palette at the bottom of the canvas lets you add nodes.\n\n"
+    "CLICK  -- creates a new node below the lowest existing node of\n"
+    "          the same type (or at a default position if none exist).\n\n"
+    "DRAG   -- drag a button onto the canvas to place the node at\n"
+    "          the exact drop position.\n\n"
+    "Node types available:\n"
+    "  Multiplicity -- filter events by minimum object counts\n"
+    "  Selection    -- filter events with a boolean expression\n"
+    "  Observable   -- click to reveal four sub-types:\n"
+    "                    Global, Object, Vec Sum, Custom\n"
+    "  Histogram    -- set bins, range and optional signal for fitting\n\n"
+    "DELETE UNCONNECTED (right side) -- removes all nodes that have\n"
+    "no connections. The Data node is never deleted.\n\n"
+    "Nodes can also be added via 'Insert Node' in the top menu bar."
+)
+
+
+def _show_palette_help(sender=None, app_data=None, user_data=None):
+    if not dpg.does_item_exist("palette_help_window"):
+        with dpg.window(
+            tag="palette_help_window",
+            label="Node Palette - Help",
+            modal=False, show=False,
+            width=_PALETTE_HELP_W, height=_PALETTE_HELP_H,
+            no_resize=True, no_collapse=True,
+            no_scrollbar=True,
+        ):
+            with dpg.child_window(width=-1, height=-40, border=False):
+                dpg.add_spacer(height=6)
+                dpg.add_text(_PALETTE_HELP_TEXT, wrap=_PALETTE_HELP_W - 24)
+            dpg.add_separator()
+            dpg.add_spacer(height=6)
+            dpg.add_button(
+                label="Close", width=90,
+                callback=lambda: dpg.configure_item("palette_help_window", show=False),
+            )
+    vp_w = dpg.get_viewport_width()
+    vp_h = dpg.get_viewport_height()
+    dpg.set_item_pos("palette_help_window",
+                     [(vp_w - _PALETTE_HELP_W) // 2,
+                      (vp_h - _PALETTE_HELP_H) // 2])
+    dpg.configure_item("palette_help_window", show=True)
+    dpg.focus_item("palette_help_window")
 
 
 def _show_obs_submenu(sender=None, app_data=None, user_data=None):
@@ -301,7 +495,7 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                                 user_data=(_det, _en),
                             )
 
-        with dpg.menu(label="Add Node"):
+        with dpg.menu(label="Insert Node"):
             dpg.add_menu_item(
                 label="Multiplicity",
                 callback=lambda: create_node("Multiplicity"),
@@ -338,11 +532,21 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                 callback=_show_about_window,
             )
 
+        with dpg.menu(label="Help"):
+            dpg.add_menu_item(
+                label="Tutorial...",
+                callback=show_tutorial,
+            )
+            dpg.add_menu_item(
+                label="Exercises...",
+                callback=lambda: _show_exercises_window(),
+            )
+
     # ── Layout: node editor (left) + control panel with console (right) ───
     with dpg.group(horizontal=True):
 
         # Left: node editor (leaves room for palette at bottom)
-        with dpg.child_window(width=-670, height=-75, border=False,
+        with dpg.child_window(width=-670, height=-85, border=False,
                               tag="node_editor_pane",
                               drop_callback=on_node_editor_drop):
             with dpg.node_editor(
@@ -355,9 +559,15 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                 pass
 
         # Right: controls + plot + console
-        with dpg.child_window(width=660, height=-75, border=False):
+        with dpg.child_window(width=660, height=-85, border=False):
 
-            dpg.add_spacer(height=18)
+            dpg.add_spacer(height=6)
+            dpg.add_text(
+                "Pipeline:  Data  ->  Multiplicity  ->  Selection  ->  Observable  ->  Histogram",
+                color=(100, 150, 200, 180),
+                tag="pipeline_flow_label",
+            )
+            dpg.add_spacer(height=6)
             dpg.add_progress_bar(
                 label="Progress",
                 tag="ui_progress_bar",
@@ -418,7 +628,20 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                 height=42,
             )
             dpg.add_spacer(height=5)
-            dpg.add_spacer(height=6)
+            # ── Node-state colour legend ───────────────────────────────────
+            with dpg.group(horizontal=True):
+                dpg.add_text("Node states:", color=(155, 155, 155))
+                dpg.add_spacer(width=6)
+                dpg.add_text("[Done]",    color=(48, 195, 70))
+                dpg.add_spacer(width=4)
+                dpg.add_text("[Cached]",  color=(30, 190, 210))
+                dpg.add_spacer(width=4)
+                dpg.add_text("[Active]",  color=(215, 145, 25))
+                dpg.add_spacer(width=4)
+                dpg.add_text("[Stopped]", color=(200, 110, 20))
+                dpg.add_spacer(width=4)
+                dpg.add_text("[Error]",   color=(210, 50, 50))
+            dpg.add_spacer(height=4)
             with dpg.group(tag="plot_display_group"):
                 dpg.add_image(
                     "plot_texture_buffer_0",
@@ -426,63 +649,140 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                     width=636,
                     height=454,
                 )
-            with dpg.child_window(
-                tag="console_scroll_container",
-                width=-1,
-                height=-1,    # fills all remaining height
-                border=False,
-            ):
-                dpg.add_text(
-                    tag="ui_console_log",
-                    default_value="Initialized.\n",
-                    wrap=0,
+            with dpg.collapsing_header(label="Cut-flow", default_open=True,
+                                        tag="cutflow_header"):
+                dpg.add_image(
+                    "cutflow_texture_buffer",
+                    tag="cutflow_view_frame",
+                    width=636,
+                    height=550,
                 )
+            with dpg.collapsing_header(label="Console", default_open=True,
+                                        tag="console_header"):
+                with dpg.child_window(
+                    tag="console_scroll_container",
+                    width=-1,
+                    height=150,
+                    border=False,
+                ):
+                    dpg.add_text(
+                        tag="ui_console_log",
+                        default_value="Initialized.\n",
+                        wrap=0,
+                    )
 
     # ── Node palette (bottom bar) — must be inside the primary window ─────
-    # Palette height 70 px; buttons 44 px → top spacer = (70-44)//2 = 13 px
-    with dpg.child_window(width=-1, height=70, border=True,
+    # Height 80 px, no_scrollbar prevents any overflow scroll.
+    # A two-column borderless table separates node-creation buttons (left,
+    # stretching) from the Delete Unconnected button (right, fixed width).
+    # Vertical centering: child_window padding is ~8 px top+bottom,
+    # leaving ~64 px usable; spacer = (64 - 44) // 2 = 10 px.
+    with dpg.child_window(width=-1, height=80, border=True,
+                          no_scrollbar=True,
                           tag="node_palette_bar"):
-        dpg.add_spacer(height=13)
+        dpg.add_spacer(height=10)
+        with dpg.table(header_row=False,
+                       borders_innerH=False, borders_innerV=False,
+                       borders_outerH=False, borders_outerV=False,
+                       pad_outerX=False):
+            dpg.add_table_column(init_width_or_weight=1.0, width_stretch=True)
+            dpg.add_table_column(init_width_or_weight=186.0, width_fixed=True)
+            with dpg.table_row():
 
-        # ── Main palette view ─────────────────────────────────────────────
-        with dpg.group(horizontal=True, tag="palette_main_grp"):
-            dpg.add_spacer(width=8)
-            with dpg.group(horizontal=False):
-                dpg.add_spacer(height=15)
-                dpg.add_text("Drag to canvas ›")
-            dpg.add_spacer(width=12)
-            for _pt, _plabel in [("Multiplicity", "Multiplicity"),
-                                  ("Selection",    "Selection")]:
-                _pbtn = dpg.add_button(label=_plabel, width=160, height=44)
-                with dpg.drag_payload(parent=_pbtn, drag_data=_pt,
-                                      label=f"  + {_plabel}  "):
-                    pass
-                dpg.add_spacer(width=8)
-            # Observable button — click to expand submenu (not draggable)
-            dpg.add_button(label="Observable", width=160, height=44,
-                           callback=_show_obs_submenu)
-            dpg.add_spacer(width=8)
-            _pbtn = dpg.add_button(label="Histogram", width=160, height=44)
-            with dpg.drag_payload(parent=_pbtn, drag_data="Histogram",
-                                  label="  + Histogram  "):
-                pass
-            dpg.add_spacer(width=8)
+                # ── Left cell: node-creation buttons ─────────────────────
+                with dpg.table_cell():
 
-        # ── Observable submenu view (hidden until Observable is clicked) ──
-        with dpg.group(horizontal=True, tag="palette_obs_grp", show=False):
-            dpg.add_spacer(width=8)
-            dpg.add_button(label="< Back", width=90, height=44,
-                           callback=_show_main_palette)
-            dpg.add_spacer(width=12)
-            for _pt, _pl in [("ObsGlobal",    "Global"),
-                              ("ObsObject",    "Object"),
-                              ("ObsVectorSum", "Vec Sum"),
-                              ("ObsCustom",    "Custom")]:
-                _pb = dpg.add_button(label=_pl, width=130, height=44)
-                with dpg.drag_payload(parent=_pb, drag_data=_pt,
-                                      label=f"  + {_pl}  "):
-                    pass
-                dpg.add_spacer(width=8)
+                    # ── Main palette view ─────────────────────────────────
+                    with dpg.group(horizontal=True, tag="palette_main_grp"):
+                        dpg.add_spacer(width=8)
+                        # Label + help button, vertically centred with buttons
+                        with dpg.group(horizontal=False):
+                            dpg.add_spacer(height=14)
+                            dpg.add_text("Click or drag")
+                        dpg.add_spacer(width=2)
+                        with dpg.group(horizontal=False):
+                            dpg.add_spacer(height=9)
+                            dpg.add_button(label=" ? ", width=26, height=26,
+                                           callback=_show_palette_help)
+                        dpg.add_spacer(width=10)
+                        for _pt, _plabel in [("Multiplicity", "Multiplicity"),
+                                              ("Selection",    "Selection")]:
+                            _pbtn = dpg.add_button(
+                                label=_plabel, width=160, height=44,
+                                callback=lambda s, a, u: create_node_below_lowest(u),
+                                user_data=_pt,
+                            )
+                            with dpg.drag_payload(parent=_pbtn, drag_data=_pt,
+                                                  label=f"  + {_plabel}  "):
+                                pass
+                            dpg.add_spacer(width=8)
+                        # Observable button — click to expand submenu (not draggable)
+                        dpg.add_button(label="Observable", width=160, height=44,
+                                       callback=_show_obs_submenu)
+                        dpg.add_spacer(width=8)
+                        _pbtn = dpg.add_button(label="Histogram", width=160, height=44,
+                                               callback=lambda s, a, u: create_node_below_lowest(u),
+                                               user_data="Histogram")
+                        with dpg.drag_payload(parent=_pbtn, drag_data="Histogram",
+                                              label="  + Histogram  "):
+                            pass
+
+                    # ── Observable submenu (hidden until Observable clicked) ──
+                    with dpg.group(horizontal=True, tag="palette_obs_grp",
+                                   show=False):
+                        dpg.add_spacer(width=8)
+                        dpg.add_button(label="< Back", width=90, height=44,
+                                       callback=_show_main_palette)
+                        dpg.add_spacer(width=12)
+                        for _pt, _pl in [("ObsGlobal",    "Global"),
+                                          ("ObsObject",    "Object"),
+                                          ("ObsVectorSum", "Vec Sum"),
+                                          ("ObsCustom",    "Custom")]:
+                            _pb = dpg.add_button(
+                                label=_pl, width=130, height=44,
+                                callback=lambda s, a, u: create_node_below_lowest(u),
+                                user_data=_pt,
+                            )
+                            with dpg.drag_payload(parent=_pb, drag_data=_pt,
+                                                  label=f"  + {_pl}  "):
+                                pass
+                            dpg.add_spacer(width=8)
+
+                # ── Right cell: delete unconnected (right-aligned) ────────
+                with dpg.table_cell():
+                    dpg.add_spacer(width=8)
+                    dpg.add_button(label="Delete Unconnected", width=170, height=44,
+                                   tag="btn_delete_unconnected",
+                                   callback=lambda: show_delete_unconnected_confirm())
+
+# ── Run button themes: default (dark) and running (amber) ────────────────────
+with dpg.theme(tag="run_btn_running_theme"):
+    with dpg.theme_component(dpg.mvButton):
+        dpg.add_theme_color(dpg.mvThemeCol_Button,        (140, 80, 0),
+                            category=dpg.mvThemeCat_Core)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,  (170, 100, 10),
+                            category=dpg.mvThemeCat_Core)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,   (110, 60, 0),
+                            category=dpg.mvThemeCat_Core)
+with dpg.theme(tag="run_btn_default_theme"):
+    with dpg.theme_component(dpg.mvButton):
+        dpg.add_theme_color(dpg.mvThemeCol_Button,        (37, 37, 38),
+                            category=dpg.mvThemeCat_Core)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,  (55, 55, 56),
+                            category=dpg.mvThemeCat_Core)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,   (26, 26, 27),
+                            category=dpg.mvThemeCat_Core)
+
+# ── Delete Unconnected button dark-red theme ──────────────────────────────────
+with dpg.theme(tag="delete_unconnected_theme"):
+    with dpg.theme_component(dpg.mvButton):
+        dpg.add_theme_color(dpg.mvThemeCol_Button,        (139, 30, 30),
+                            category=dpg.mvThemeCat_Core)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,  (170, 50, 50),
+                            category=dpg.mvThemeCat_Core)
+        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,   (110, 20, 20),
+                            category=dpg.mvThemeCat_Core)
+dpg.bind_item_theme("btn_delete_unconnected", "delete_unconnected_theme")
 
 # ── Progress bar green theme ──────────────────────────────────────────────────
 with dpg.theme(tag="progress_bar_theme"):
@@ -500,10 +800,20 @@ if _large_font is not None:
 # ── Create initial nodes ──────────────────────────────────────────────────────
 _X_STEP = 310  # horizontal gap between nodes
 create_node("DataSource",   pos=[30,              100], name="IDEA 91 GeV data")
-create_node("Multiplicity", pos=[30 + _X_STEP,    100], name="all events")
-create_node("Selection",    pos=[30 + _X_STEP * 2, 100], name="2 leptons")
-create_node("ObsObject",    pos=[30 + _X_STEP * 3, 100], name="MET pT")
-create_node("Histogram",    pos=[30 + _X_STEP * 4, 100], name="MET pT")
+create_node("Multiplicity", pos=[30 + _X_STEP,    100], name="2 leptons")
+create_node("Selection",    pos=[30 + _X_STEP * 2, 100], name="di-lepton")
+create_node("ObsVectorSum", pos=[30 + _X_STEP * 3, 100], name="Di-lepton mass")
+create_node("Histogram",    pos=[30 + _X_STEP * 4, 100], name="Di-lepton mass")
+
+# ── Set physics-meaningful defaults for Z-boson template ─────────────────────
+# Multiplicity: require exactly 2 or more leptons
+dpg.set_value("txt_leptons_1", 2)
+# Selection: require at least 2 leptons with pT thresholds
+dpg.set_value("txt_sel_2", "l1.pt > 20 and l2.pt > 10")
+# Histogram: 50 bins over 60-120 GeV to capture the Z boson peak
+dpg.set_value("txt_bins_4", 50)
+dpg.set_value("txt_range_min_4", 60.0)
+dpg.set_value("txt_range_max_4", 120.0)
 
 # ── Connect initial nodes in pipeline order ───────────────────────────────────
 for _out_nid, _in_nid in [(0, 1), (1, 2), (2, 3), (3, 4)]:

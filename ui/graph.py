@@ -2,20 +2,21 @@ import re
 from collections import deque
 import dearpygui.dearpygui as dpg
 import ui.state as _state
-from ui.state import REGISTRY, NODE_HIERARCHY, NODE_LABELS
+from ui.state import REGISTRY, NODE_LABELS
 
 # ---------------------------------------------------------------------------
 # Variable catalogue for autocomplete
 # ---------------------------------------------------------------------------
 SEL_ALL_VARS = [
     "nlep", "nel", "nmu", "njets", "nphot",
-    "l1.pt", "l1.eta", "l1.phi", "l1.e", "l1.d0", "l1.z0", "l1.p4",
-    "l2.pt", "l2.eta", "l2.phi", "l2.e", "l2.d0", "l2.z0", "l2.p4",
+    "l1.pt", "l1.eta", "l1.phi", "l1.e", "l1.d0", "l1.z0", "l1.charge", "l1.flavour", "l1.p4",
+    "l2.pt", "l2.eta", "l2.phi", "l2.e", "l2.d0", "l2.z0", "l2.charge", "l2.flavour", "l2.p4",
     "j1.pt", "j1.eta", "j1.phi", "j1.e", "j1.btag", "j1.p4",
     "j2.pt", "j2.eta", "j2.phi", "j2.e", "j2.btag", "j2.p4",
     "ph1.pt", "ph1.eta", "ph1.phi", "ph1.e", "ph1.p4",
     "ph2.pt", "ph2.eta", "ph2.phi", "ph2.e", "ph2.p4",
-    "met.pt", "met.eta", "met.phi", "met.e", "met.p4",
+    "met.pt", "met.phi",
+    "mT(l1, met)", "mT(l2, met)",
 ]
 
 _SEL_MAX_SUGS = 5
@@ -40,7 +41,7 @@ _OBJ_VARS = {
     "j2":  ["pt", "eta", "phi", "e", "btag"],
     "ph1": ["pt", "eta", "phi", "e"],
     "ph2": ["pt", "eta", "phi", "e"],
-    "met": ["pt", "eta", "phi", "e"],
+    "met": ["pt", "phi"],
 }
 
 _VEC_RESULT_VARS = ["mass", "pt", "eta", "phi", "e"]
@@ -136,6 +137,41 @@ def _nid_from_slot(slot_id) -> int | None:
 
 _CHAINABLE_TYPES = {"Multiplicity", "Selection"}
 
+# Theme for Selection→Selection AND-chain links (created on first use).
+_AND_LINK_THEME: list[int | None] = [None]
+
+
+def _get_and_link_theme() -> int:
+    """Return (creating if necessary) a blue theme for AND-chained Selection links."""
+    if _AND_LINK_THEME[0] is None:
+        tid = dpg.generate_uuid()
+        with dpg.theme(tag=tid):
+            with dpg.theme_component(dpg.mvNodeLink):
+                dpg.add_theme_color(dpg.mvNodeCol_Link,
+                                    (80, 140, 240, 255), category=dpg.mvThemeCat_Nodes)
+                dpg.add_theme_color(dpg.mvNodeCol_LinkHovered,
+                                    (110, 170, 255, 255), category=dpg.mvThemeCat_Nodes)
+                dpg.add_theme_color(dpg.mvNodeCol_LinkSelected,
+                                    (150, 200, 255, 255), category=dpg.mvThemeCat_Nodes)
+        _AND_LINK_THEME[0] = tid
+    return _AND_LINK_THEME[0]
+
+
+# Explicit allowlist of valid src → dst connections.
+# Observable subtypes are grouped together on the destination side.
+_OBS_TYPES_SET = {"Observable", "ObsGlobal", "ObsObject", "ObsVectorSum", "ObsCustom"}
+_VALID_CONNECTIONS: dict[str, set[str]] = {
+    "DataSource":   {"Multiplicity", "Selection"},
+    "Multiplicity": {"Multiplicity", "Selection"},
+    "Selection":    {"Selection"} | _OBS_TYPES_SET,
+    "Observable":   {"Histogram"},
+    "ObsGlobal":    {"Histogram"},
+    "ObsObject":    {"Histogram"},
+    "ObsVectorSum": {"Histogram"},
+    "ObsCustom":    {"Histogram"},
+    "Histogram":    set(),
+}
+
 
 def _normalize_slot(slot_id):
     """Normalize a slot identifier to its integer alias id.
@@ -160,17 +196,48 @@ def link_callback(sender, app_data):
     start_nid = _nid_from_slot(start_slot)
     end_nid   = _nid_from_slot(end_slot)
     if start_nid is not None and end_nid is not None:
-        src_type  = REGISTRY.nodes.get(start_nid)
-        dst_type  = REGISTRY.nodes.get(end_nid)
-        src_level = NODE_HIERARCHY.get(src_type, -1)
-        dst_level = NODE_HIERARCHY.get(dst_type, 99)
-        # Allow same-type chaining for Multiplicity and Selection (AND logic)
-        same_type_chain = src_type == dst_type and src_type in _CHAINABLE_TYPES
-        if not same_type_chain and src_level >= dst_level:
+        # Normalize drag direction: if the user started from an input pin swap
+        # start/end so src is always the data-flow source (output-pin side).
+        try:
+            start_alias = dpg.get_item_alias(start_slot) or ""
+            if "slot_in_" in start_alias:
+                start_nid, end_nid = end_nid, start_nid
+                start_slot, end_slot = end_slot, start_slot
+        except Exception:
+            pass
+
+        src_type = REGISTRY.nodes.get(start_nid)
+        dst_type = REGISTRY.nodes.get(end_nid)
+        valid_dsts = _VALID_CONNECTIONS.get(src_type, set())
+
+        if dst_type not in valid_dsts:
+            from ui.components import log_to_message_center
+            src_label = NODE_LABELS.get(src_type, src_type)
+            dst_label = NODE_LABELS.get(dst_type, dst_type)
+            if valid_dsts:
+                valid_str = ", ".join(
+                    NODE_LABELS.get(t, t) for t in sorted(valid_dsts)
+                )
+                log_to_message_center(
+                    f"Invalid link: {src_label} -> {dst_label}. "
+                    f"{src_label} can only connect to: {valid_str}."
+                )
+            else:
+                log_to_message_center(
+                    f"Invalid link: {src_label} has no valid outputs."
+                )
             return
     link_id = dpg.add_node_link(start_slot, end_slot, parent=sender)
     REGISTRY.links[link_id] = (start_slot, end_slot)
     REGISTRY.connections[start_slot] = end_slot
+    # Colour Selection→Selection (AND-chain) links in blue for visual distinction.
+    if (start_nid is not None and end_nid is not None
+            and REGISTRY.nodes.get(start_nid) == "Selection"
+            and REGISTRY.nodes.get(end_nid) == "Selection"):
+        try:
+            dpg.bind_item_theme(link_id, _get_and_link_theme())
+        except Exception:
+            pass
 
 
 def delink_callback(sender, app_data):
@@ -220,8 +287,8 @@ def _on_wheel_pan(sender=None, app_data=None, user_data=None):
         return
     delta = app_data  # +1 = scroll up, -1 = scroll down
     shift = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)
-    dx = int(delta * _PAN_SPEED) if shift else 0
-    dy = int(delta * _PAN_SPEED) if not shift else 0
+    dx = int(-delta * _PAN_SPEED) if shift else 0
+    dy = int(-delta * _PAN_SPEED) if not shift else 0
     _pan_all_nodes(dx, dy)
 
 
@@ -266,6 +333,7 @@ _UNDO_HISTORY: deque = deque(maxlen=10)
 _WIDGET_PREFIXES = (
     "cb_energy_", "cb_detector_",
     "cb_ltype_", "txt_leptons_", "txt_jets_", "txt_photons_",
+    "cb_op_lep_", "cb_op_jet_", "cb_op_phot_",
     "txt_sel_", "txt_obs_", "obs_expr_",
     "cb_target_", "txt_bins_", "txt_range_min_", "txt_range_max_",
 )
@@ -279,6 +347,15 @@ _INPUT_PREFIXES = (
 
 def _any_input_active() -> bool:
     """Return True if any text/number input field is currently being edited."""
+    # The discovery popup is a modal dialog whose process-name field is not
+    # tied to a node; while it is open, backspace/delete must not fall through
+    # to node/link deletion. Block for the whole modal, not just its input.
+    try:
+        if dpg.does_item_exist("discovery_window") and \
+                dpg.is_item_shown("discovery_window"):
+            return True
+    except Exception:
+        pass
     for nid in REGISTRY.nodes:
         for prefix in _INPUT_PREFIXES:
             tag = f"{prefix}{nid}"
@@ -360,6 +437,9 @@ def _restore_link(snap: dict):
         lid = dpg.add_node_link(start_slot, end_slot, parent="node_editor_container")
         REGISTRY.links[lid] = (start_slot, end_slot)
         REGISTRY.connections[start_slot] = end_slot
+        if (REGISTRY.nodes.get(src_nid) == "Selection"
+                and REGISTRY.nodes.get(dst_nid) == "Selection"):
+            dpg.bind_item_theme(lid, _get_and_link_theme())
     except Exception:
         pass
 
@@ -429,6 +509,8 @@ def _on_key_undo(sender=None, app_data=None, user_data=None):
     if not (dpg.is_key_down(dpg.mvKey_LControl) or dpg.is_key_down(dpg.mvKey_RControl)):
         return
     if _any_input_active():
+        from ui.components import log_to_message_center
+        log_to_message_center("Undo unavailable while editing — press Enter or click away first.")
         return
     undo_last()
 
@@ -569,7 +651,7 @@ def _set_node_active(nid: int):
 
 
 def _set_node_aborted(nid: int):
-    """Apply a red theme to indicate the node was processing when the run was stopped."""
+    """Apply a dark-orange theme to indicate the node was interrupted when the run stopped."""
     node_tag = f"node_{nid}"
     if not dpg.does_item_exist(node_tag):
         return
@@ -578,13 +660,13 @@ def _set_node_aborted(nid: int):
     with dpg.theme(tag=theme_id):
         with dpg.theme_component(dpg.mvNode):
             dpg.add_theme_color(dpg.mvNodeCol_NodeBackground,
-                                (75, 15, 15), category=dpg.mvThemeCat_Nodes)
+                                (70, 40, 5), category=dpg.mvThemeCat_Nodes)
             dpg.add_theme_color(dpg.mvNodeCol_NodeBackgroundHovered,
-                                (95, 20, 20), category=dpg.mvThemeCat_Nodes)
+                                (90, 55, 8), category=dpg.mvThemeCat_Nodes)
             dpg.add_theme_color(dpg.mvNodeCol_NodeBackgroundSelected,
-                                (95, 20, 20), category=dpg.mvThemeCat_Nodes)
+                                (90, 55, 8), category=dpg.mvThemeCat_Nodes)
             dpg.add_theme_color(dpg.mvNodeCol_NodeOutline,
-                                (210, 50, 50), category=dpg.mvThemeCat_Nodes)
+                                (200, 110, 20), category=dpg.mvThemeCat_Nodes)
     dpg.bind_item_theme(node_tag, theme_id)
     _NODE_RUNTIME_THEME_IDS[nid] = theme_id
     _NODE_RUNTIME_STATES[nid] = "aborted"
@@ -610,6 +692,28 @@ def _set_node_done(nid: int):
     dpg.bind_item_theme(node_tag, theme_id)
     _NODE_RUNTIME_THEME_IDS[nid] = theme_id
     _NODE_RUNTIME_STATES[nid] = "done"
+
+
+def _set_node_cached(nid: int):
+    """Apply a teal/cyan theme to indicate the node result was loaded from cache."""
+    node_tag = f"node_{nid}"
+    if not dpg.does_item_exist(node_tag):
+        return
+    _delete_runtime_theme(nid)
+    theme_id = dpg.generate_uuid()
+    with dpg.theme(tag=theme_id):
+        with dpg.theme_component(dpg.mvNode):
+            dpg.add_theme_color(dpg.mvNodeCol_NodeBackground,
+                                (8, 58, 65), category=dpg.mvThemeCat_Nodes)
+            dpg.add_theme_color(dpg.mvNodeCol_NodeBackgroundHovered,
+                                (12, 74, 84), category=dpg.mvThemeCat_Nodes)
+            dpg.add_theme_color(dpg.mvNodeCol_NodeBackgroundSelected,
+                                (12, 74, 84), category=dpg.mvThemeCat_Nodes)
+            dpg.add_theme_color(dpg.mvNodeCol_NodeOutline,
+                                (30, 190, 210), category=dpg.mvThemeCat_Nodes)
+    dpg.bind_item_theme(node_tag, theme_id)
+    _NODE_RUNTIME_THEME_IDS[nid] = theme_id
+    _NODE_RUNTIME_STATES[nid] = "cached"
 
 
 def _clear_node_runtime_theme(nid: int):
@@ -670,7 +774,8 @@ def validate_node_expressions() -> list[tuple[int, str]]:
             errors.append((nid, "Expression is empty."))
             continue
         try:
-            compile(expr, "<expr>", "eval")
+            from engine.path_filter import preprocess_hep_expr
+            compile(preprocess_hep_expr(expr), "<expr>", "eval")
         except SyntaxError as e:
             errors.append((nid, f"Syntax error: {e.msg}\n  {expr}"))
     return errors
@@ -806,6 +911,9 @@ def _build_obs_expr(nid: int, subtype: str):
         return
 
     dpg.set_value(expr_tag, expr)
+    expr_label_tag = f"lbl_obs_preview_{nid}"
+    if dpg.does_item_exist(expr_label_tag):
+        dpg.set_value(expr_label_tag, f"Expr: {expr}")
 
 
 def _build_obs_label(nid: int, subtype: str) -> str:
@@ -924,12 +1032,27 @@ def _obs_rebuild_object_rows(nid: int, pairs: list):
             callback=lambda s, a, u: _obs_obj_change(u[0], u[1], a),
             user_data=(nid, i), parent=row,
         )
+        var_combo_tag = f"obs_o_var_{nid}_{i}"
         dpg.add_combo(
             valid_vars, default_value=var,
-            tag=f"obs_o_var_{nid}_{i}", width=60,
+            tag=var_combo_tag, width=60,
             callback=lambda s, a, u: _build_obs_expr(u, "ObsObject"),
             user_data=nid, parent=row,
         )
+        with dpg.tooltip(parent=var_combo_tag):
+            dpg.add_text(
+                "Variable options for the selected object:\n\n"
+                "  pt   - transverse momentum [GeV]\n"
+                "  eta  - pseudorapidity\n"
+                "  phi  - azimuthal angle [rad]\n"
+                "  e    - energy [GeV]\n"
+                "  d0   - transverse impact parameter (leptons)\n"
+                "  z0   - longitudinal impact parameter (leptons)\n"
+                "  btag - b-tagging discriminant [0, 1] (jets only)\n"
+                "         Values near 1 indicate a b-jet.\n"
+                "         Typical working point: btag > 0.7\n"
+                "         (~70% b-jet efficiency, ~1% light-jet rate)"
+            )
         if i < n - 1:
             dpg.add_text("+", parent=row)
         if n > 1:
@@ -1117,23 +1240,37 @@ def _add_node_widgets(node_type: str, nid: int, parent_tag: str):
         )
 
     elif node_type == "Multiplicity":
+        _mult_info_tag = f"mult_info_{nid}"
+        dpg.add_text("Multiplicity: hover for info", tag=_mult_info_tag,
+                     color=(140, 140, 140, 180), parent=parent_tag)
+        with dpg.tooltip(parent=_mult_info_tag):
+            dpg.add_text(
+                "Multiplicity = the number of reconstructed\n"
+                "particles of each type in a collision event.\n\n"
+                "Set the count threshold and comparison operator\n"
+                "for each particle type (0 = no requirement).",
+            )
         dpg.add_combo(
             ["Any", "Electron", "Muon"],
             label="Lepton", tag=f"cb_ltype_{nid}",
             default_value="Any", width=90, parent=parent_tag,
         )
-        dpg.add_input_int(
-            label="Min Leptons", tag=f"txt_leptons_{nid}",
-            default_value=0, width=90, parent=parent_tag,
-        )
-        dpg.add_input_int(
-            label="Min Jets", tag=f"txt_jets_{nid}",
-            default_value=0, width=90, parent=parent_tag,
-        )
-        dpg.add_input_int(
-            label="Min Photons", tag=f"txt_photons_{nid}",
-            default_value=0, width=90, parent=parent_tag,
-        )
+        _ops = [">=", "==", "<="]
+        with dpg.group(horizontal=True, parent=parent_tag):
+            dpg.add_combo(_ops, tag=f"cb_op_lep_{nid}",
+                          default_value=">=", width=45)
+            dpg.add_input_int(label="Leptons", tag=f"txt_leptons_{nid}",
+                              default_value=0, width=60)
+        with dpg.group(horizontal=True, parent=parent_tag):
+            dpg.add_combo(_ops, tag=f"cb_op_jet_{nid}",
+                          default_value=">=", width=45)
+            dpg.add_input_int(label="Jets", tag=f"txt_jets_{nid}",
+                              default_value=0, width=60)
+        with dpg.group(horizontal=True, parent=parent_tag):
+            dpg.add_combo(_ops, tag=f"cb_op_phot_{nid}",
+                          default_value=">=", width=45)
+            dpg.add_input_int(label="Photons", tag=f"txt_photons_{nid}",
+                              default_value=0, width=60)
 
     elif node_type == "Selection":
         _make_expr_widgets(
@@ -1163,6 +1300,10 @@ def _add_node_widgets(node_type: str, nid: int, parent_tag: str):
             callback=lambda s, a, u: _obs_add_global_row(u),
             user_data=nid,
         )
+        dpg.add_text(
+            f"Expr: {_GLOBAL_VARS[0]}", tag=f"lbl_obs_preview_{nid}",
+            color=(180, 180, 180, 200), parent=parent_tag,
+        )
 
     elif node_type == "ObsObject":
         dpg.add_input_text(
@@ -1175,6 +1316,10 @@ def _add_node_widgets(node_type: str, nid: int, parent_tag: str):
             label="+", small=True, parent=parent_tag,
             callback=lambda s, a, u: _obs_add_object_row(u),
             user_data=nid,
+        )
+        dpg.add_text(
+            "Expr: met.pt", tag=f"lbl_obs_preview_{nid}",
+            color=(180, 180, 180, 200), parent=parent_tag,
         )
 
     elif node_type == "ObsVectorSum":
@@ -1194,6 +1339,10 @@ def _add_node_widgets(node_type: str, nid: int, parent_tag: str):
             label="+", small=True, parent=parent_tag,
             callback=lambda s, a, u: _obs_add_vecsum_row(u),
             user_data=nid,
+        )
+        dpg.add_text(
+            "Expr: (l1.p4 + l2.p4).mass", tag=f"lbl_obs_preview_{nid}",
+            color=(180, 180, 180, 200), parent=parent_tag,
         )
 
     elif node_type == "Histogram":
@@ -1429,18 +1578,115 @@ def create_node(node_type: str, pos: list | None = None, name: str | None = None
 def on_node_editor_drop(sender, app_data, user_data):
     """Create a node at the drop position using screen-to-pane coordinate mapping.
 
-    dpg.get_item_pos reads state['pos'] which for child_window items returns
-    the screen-space position (unlike rect_min, which is only populated for
-    non-container ImGui items).
+    get_item_pos for child_window items returns a position relative to the
+    viewport, not the screen. get_mouse_pos(local=False) is in screen space.
+    We subtract both the viewport origin and the pane's viewport-relative pos
+    to get the correct canvas coordinate regardless of where the window sits.
     """
     node_type = app_data
     if not node_type or not isinstance(node_type, str):
         return
     screen = dpg.get_mouse_pos(local=False)
+    vp_pos = dpg.get_viewport_pos()
     origin = dpg.get_item_pos("node_editor_pane")
-    x = max(10, int(screen[0] - origin[0]))
-    y = max(10, int(screen[1] - origin[1]))
+    x = max(10, int(screen[0] - vp_pos[0] - origin[0]))
+    y = max(10, int(screen[1] - vp_pos[1] - origin[1]))
     create_node(node_type, pos=[x, y])
+
+
+def create_node_below_lowest(node_type: str):
+    """Create a node 50 px below the bottom edge of the lowest same-type node.
+
+    "Bottom edge" = node Y position + rendered node height.  Falls back to a
+    default position when no node of the given type exists yet.
+    """
+    _TYPE_GROUPS = {
+        "ObsGlobal": _OBS_TYPES,
+        "ObsObject": _OBS_TYPES,
+        "ObsVectorSum": _OBS_TYPES,
+        "ObsCustom": _OBS_TYPES,
+        "Observable": _OBS_TYPES,
+    }
+    match_types = _TYPE_GROUPS.get(node_type, {node_type})
+
+    best_x, best_bottom = 100, 100
+    found = False
+    for nid, ntype in REGISTRY.nodes.items():
+        if ntype not in match_types:
+            continue
+        tag = f"node_{nid}"
+        if not dpg.does_item_exist(tag):
+            continue
+        nx, ny = dpg.get_item_pos(tag)
+        h = dpg.get_item_height(tag)
+        if h <= 0:
+            h = 150  # fallback before first render
+        bottom = ny + h
+        if not found or bottom > best_bottom:
+            best_x, best_bottom = nx, bottom
+            found = True
+
+    create_node(node_type, pos=[best_x, best_bottom + 50 if found else 100])
+
+
+def _unconnected_nids() -> list[int]:
+    """Return node IDs that have no links (DataSource excluded)."""
+    linked: set = set()
+    for _lid, (start_slot, end_slot) in REGISTRY.links.items():
+        s = REGISTRY.slot_node.get(start_slot)
+        e = REGISTRY.slot_node.get(end_slot)
+        if s is not None:
+            linked.add(s)
+        if e is not None:
+            linked.add(e)
+    return [
+        nid for nid, ntype in list(REGISTRY.nodes.items())
+        if nid not in linked and ntype != "DataSource"
+    ]
+
+
+def show_delete_unconnected_confirm():
+    """Show a confirmation dialog listing the nodes that would be deleted."""
+    to_delete = _unconnected_nids()
+    if not to_delete:
+        from ui.components import log_to_message_center
+        log_to_message_center("No unconnected nodes to delete.")
+        return
+    names = []
+    for nid in to_delete:
+        name = REGISTRY.node_names.get(nid, "").strip()
+        label = NODE_LABELS.get(REGISTRY.nodes.get(nid, ""), "?")
+        names.append(f'  {label}: "{name}"' if name else f"  {label}")
+    body = f"Delete {len(to_delete)} unconnected node(s)?\n\n" + "\n".join(names)
+    if dpg.does_item_exist("delete_unconnected_confirm_text"):
+        dpg.set_value("delete_unconnected_confirm_text", body)
+    if dpg.does_item_exist("delete_unconnected_confirm_window"):
+        vp_w = dpg.get_viewport_width()
+        vp_h = dpg.get_viewport_height()
+        dpg.set_item_pos("delete_unconnected_confirm_window",
+                         [(vp_w - 400) // 2, (vp_h - 160) // 2])
+        dpg.configure_item("delete_unconnected_confirm_window", show=True)
+        dpg.focus_item("delete_unconnected_confirm_window")
+
+
+def delete_unconnected_nodes():
+    """Delete all unconnected nodes, storing a single batch undo entry.
+
+    A single Ctrl+Z restores all nodes that were removed in one call.
+    DataSource nodes are never deleted.
+    """
+    to_delete = _unconnected_nids()
+    if not to_delete:
+        return
+
+    batch = [snap for nid in to_delete
+             for snap in [_snapshot_node(nid)] if snap]
+    for nid in to_delete:
+        delete_node(nid, _push_undo=False)
+    if batch:
+        _UNDO_HISTORY.append(
+            batch[0] if len(batch) == 1 else {'type': 'batch', 'items': batch}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1467,7 +1713,10 @@ def compile_graph_topology() -> dict:
         njets = int(dpg.get_value(f"txt_jets_{n}"))
         ltype = dpg.get_value(f"cb_ltype_{n}") if dpg.does_item_exist(f"cb_ltype_{n}") else "Any"
         nphot = int(dpg.get_value(f"txt_photons_{n}")) if dpg.does_item_exist(f"txt_photons_{n}") else 0
-        mult_cuts.append((nlep, njets, ltype, nphot))
+        op_lep  = dpg.get_value(f"cb_op_lep_{n}") if dpg.does_item_exist(f"cb_op_lep_{n}") else ">="
+        op_jet  = dpg.get_value(f"cb_op_jet_{n}") if dpg.does_item_exist(f"cb_op_jet_{n}") else ">="
+        op_phot = dpg.get_value(f"cb_op_phot_{n}") if dpg.does_item_exist(f"cb_op_phot_{n}") else ">="
+        mult_cuts.append((nlep, op_lep, njets, op_jet, ltype, nphot, op_phot))
 
     # Build per-node successor/predecessor maps from all links
     node_successors   = {}  # nid -> [nid, ...]
@@ -1642,6 +1891,7 @@ def compile_graph_topology() -> dict:
         sel_name = REGISTRY.node_names.get(sel_nid, "").strip()
         selections.append({
             "nid": sel_nid,
+            "prefix_nids": prefix,
             "node_name": sel_name if sel_name else f"Selection {len(selections) + 1}",
             "sel_custom_name": sel_name,   # empty string when not explicitly named
             "sel_exprs": sel_exprs,

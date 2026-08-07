@@ -90,12 +90,17 @@ _PAGES = [
     ),
     (
         "Node Palette",
-        "The palette at the bottom lets you drag new nodes onto the canvas.\n\n"
-        "Multiplicity, Selection, and Histogram are dragged directly.\n\n"
-        "Observable opens a submenu: click the Observable button to reveal\n"
-        "four sub-types (Global, Object, Vec Sum, Custom). Drag the desired\n"
-        "type onto the canvas, then click '< Back' to return to the palette.\n\n"
-        "Nodes can also be added via Add Node in the top menu bar.",
+        "The palette at the bottom lets you add nodes to the canvas.\n\n"
+        "  Click  -- creates a new node below the lowest existing node\n"
+        "            of the same type.\n"
+        "  Drag   -- drag a button onto the canvas to place the node\n"
+        "            at the exact drop position.\n\n"
+        "Observable opens a submenu with four sub-types: Global, Object,\n"
+        "Vec Sum, Custom. The '?' button next to 'Click or drag' shows\n"
+        "this help at any time.\n\n"
+        "The Delete Unconnected button (right side) removes all nodes\n"
+        "with no connections (the Data node is always kept).\n\n"
+        "Nodes can also be added via Insert Node in the top menu bar.",
         "node_palette_bar", "window",
     ),
     (
@@ -127,9 +132,10 @@ _PAGES = [
         "  -  Multiple Histogram nodes: each plot appears in a collapsing\n"
         "     section labelled by the node's custom name.\n\n"
         "If a Fit Signal is selected, FCE Studio runs a pyhf-based fit and\n"
-        "reports signal strength mu and discovery significance Z in the\n"
-        "'Statistical fit' panel above the histogram.",
-        "stat_fit_header", "item",
+        "reports signal strength mu and discovery significance Z in a\n"
+        "'Statistical fit' panel that appears above the histogram after\n"
+        "your first successful run with a fit target configured.",
+        None, None,
     ),
 ]
 
@@ -212,25 +218,32 @@ def _refresh():
         _clear_highlight()
 
 
+def _do_close(s=None, a=None, u=None):
+    """Hide the tutorial window and clear highlights without resetting page."""
+    _clear_highlight()
+    if dpg.does_item_exist(_WIN_TAG):
+        dpg.configure_item(_WIN_TAG, show=False)
+
+
+def _on_skip(s=None, a=None, u=None):
+    """Skip button: reset to page 0 and close."""
+    _PAGE[0] = 0
+    _do_close()
+
+
 def _on_next(s=None, a=None, u=None):
     if _PAGE[0] < len(_PAGES) - 1:
         _PAGE[0] += 1
         _refresh()
     else:
-        _on_skip()
+        _PAGE[0] = 0  # Reset after Finish
+        _do_close()
 
 
 def _on_prev(s=None, a=None, u=None):
     if _PAGE[0] > 0:
         _PAGE[0] -= 1
         _refresh()
-
-
-def _on_skip(s=None, a=None, u=None):
-    _clear_highlight()
-    _PAGE[0] = 0
-    if dpg.does_item_exist(_WIN_TAG):
-        dpg.configure_item(_WIN_TAG, show=False)
 
 
 def _build_window():
@@ -242,7 +255,7 @@ def _build_window():
         width=_WIN_W, height=_WIN_H,
         no_resize=True, no_collapse=True,
         no_scrollbar=True,
-        on_close=_on_skip,
+        on_close=_do_close,
     ):
         # Content area fills all height except the bottom nav bar (~40 px).
         # height=-40 means "leave 40 px at the bottom of the parent's content
@@ -275,7 +288,10 @@ def show_tutorial():
     _build_themes()
     if not dpg.does_item_exist(_WIN_TAG):
         _build_window()
-    _PAGE[0] = 0
+    # Don't reset page -- preserve where the student left off.
+    # Guard against out-of-range values (e.g. after _PAGES is modified).
+    if _PAGE[0] >= len(_PAGES):
+        _PAGE[0] = 0
     _refresh()
     vp_w = dpg.get_viewport_width()
     vp_h = dpg.get_viewport_height()
