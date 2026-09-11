@@ -1,7 +1,10 @@
 """Offline tests for engine.downloader, using file:// URLs instead of the network."""
 import os
+import sys
 
 import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import engine.downloader as downloader
 
