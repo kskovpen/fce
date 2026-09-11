@@ -29,6 +29,7 @@ dependencies = [
     "pillow>=10",
     "pyhf>=0.7",
     "scipy>=1.11",
+    "certifi",
     "pytest>=9.1",
     "flake8>=7.3",
 ]
