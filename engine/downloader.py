@@ -1,6 +1,8 @@
 import json
 import os
-import subprocess
+import shutil
+import ssl
+import urllib.request
 
 import uproot
 
@@ -30,6 +32,34 @@ def _save_counts(counts: dict):
         os.replace(tmp, _EVENT_COUNTS_FILE)
     except Exception:
         pass
+
+
+def _ssl_context():
+    # python.org builds on macOS ship without CA certificates until
+    # "Install Certificates.command" is run; prefer certifi's bundle if present.
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def _fetch(url: str, dest: str):
+    """Download url to dest in pure Python (wget is not available on macOS).
+
+    Writes to a .part file first so a failed transfer never leaves a partial
+    file behind that would later be mistaken for a complete download.
+    """
+    tmp = dest + ".part"
+    try:
+        with urllib.request.urlopen(url, timeout=60, context=_ssl_context()) as resp, \
+                open(tmp, "wb") as out:
+            shutil.copyfileobj(resp, out, 1 << 20)
+        os.replace(tmp, dest)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def _count_root_file(local_path: str, relative_path: str, counts: dict) -> int | None:
@@ -67,7 +97,7 @@ def run_dataset_download(detector=None, energy_gev=None, force=False):
 
     yield "Fetching file list...\n"
     try:
-        subprocess.run(["wget", "-q", "-O", inventory_path, inventory_url], check=True)
+        _fetch(inventory_url, inventory_path)
     except Exception as e:
         yield f"Error: could not fetch file list — {e}\n"
         return
@@ -112,7 +142,7 @@ def run_dataset_download(detector=None, energy_gev=None, force=False):
             yield f"[{idx+1}/{total}] Downloading {relative_path}\n"
             file_url = _BASE_URL + relative_path.lstrip("/")
             try:
-                subprocess.run(["wget", "-q", "-O", local_path, file_url], check=True)
+                _fetch(file_url, local_path)
             except Exception as e:
                 yield f"  Warning: {e}\n"
                 continue
