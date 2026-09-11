@@ -216,7 +216,11 @@ def _append_event(acc, nlep, nel, nmu, njets, nphot, nbjets,
 
 def save_cache(cache_file: str, acc: dict):
     n = acc["_n"]
-    np.savez_compressed(cache_file, **{k: acc[k][:n] for k in _CACHE_KEYS})
+    arrays = {k: acc[k][:n] for k in _CACHE_KEYS}
+    if "_cutflow" in acc:
+        # Per-cut event counts (see filter_raw_event_data), read by the cut-flow chart.
+        arrays["cutflow"] = np.asarray(acc["_cutflow"], dtype=np.int64)
+    np.savez_compressed(cache_file, **arrays)
 
 
 def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
@@ -259,7 +263,7 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
             mask &= result
         # Save filtered arrays directly — same format as save_cache (float32 npz).
         np.savez_compressed(output_cache_path,
-                            **{k: data[k][mask] for k in data.files})
+                            **{k: data[k][mask] for k in data.files if k != "cutflow"})
         return
     except Exception:
         pass
@@ -490,9 +494,16 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
     ph_e   = arrays["photon_e"]   if has_ph else None
 
     mult_cuts = cfg.get("mult_cuts", [])
-    sel_exprs = cfg.get("sel_exprs", [])
     # OPT-2: use pre-compiled expression objects when passed via cfg
     compiled_sel_exprs = cfg.get("compiled_sel_exprs", None)
+    if compiled_sel_exprs is None:
+        compiled_sel_exprs = [e for e in cfg.get("sel_exprs", []) if e]
+
+    # Cut-flow: cutflow[0] counts events passing the multiplicity cuts, cutflow[k]
+    # those also passing the first k selection expressions (one per chained box).
+    cutflow = None
+    if cache_acc is not None:
+        cutflow = cache_acc.setdefault("_cutflow", [0] * (len(compiled_sel_exprs) + 1))
 
     _NULL = _P()
 
@@ -599,23 +610,17 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
             }
 
             # ── Selection expressions ────────────────────────────────────
+            if cutflow is not None:
+                cutflow[0] += 1
             skip = False
-            if compiled_sel_exprs is not None:
-                for code in compiled_sel_exprs:
-                    try:
-                        if not eval(code, {"__builtins__": _SAFE_BUILTINS}, local_vars):
-                            skip = True; break
-                    except Exception:
+            for k, code in enumerate(compiled_sel_exprs):
+                try:
+                    if not eval(code, {"__builtins__": _SAFE_BUILTINS}, local_vars):
                         skip = True; break
-            else:
-                for expr in sel_exprs:
-                    if not expr:
-                        continue
-                    try:
-                        if not eval(expr, {"__builtins__": _SAFE_BUILTINS}, local_vars):
-                            skip = True; break
-                    except Exception:
-                        skip = True; break
+                except Exception:
+                    skip = True; break
+                if cutflow is not None:
+                    cutflow[k + 1] += 1
             if skip:
                 continue
 

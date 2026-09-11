@@ -1787,17 +1787,18 @@ def compile_graph_topology() -> dict:
         if obs_nid is not None and hist_nid is not None:
             obs_hist_pairs = [(obs_nid, hist_nid)]
 
-    # Compute the prefix chain from branch root up to (and including) a given sel_nid.
-    # For an Observable directly connected to Selection_A in a chain [A, B], this
-    # returns [A] so that only expr_A is applied — not the full [A, B] chain.
+    # Compute the prefix chain from branch root up to (and including) a given sel_nid
+    # by walking Selection parents, so sibling branches (A -> B and A -> C) never pick
+    # up each other's cuts. For an Observable directly connected to Selection_A in a
+    # chain [A, B], this returns [A] so that only expr_A is applied.
     def _prefix_chain(sel_nid):
-        root = sel_to_branch.get(sel_nid, sel_nid)
-        full_chain = branch_chains.get(root, [sel_nid])
-        try:
-            pos = full_chain.index(sel_nid)
-            return full_chain[:pos + 1]
-        except ValueError:
-            return [sel_nid]
+        path = [sel_nid]
+        while True:
+            parents = [p for p in node_predecessors.get(path[-1], [])
+                       if nodes.get(p) == "Selection" and p not in path]
+            if not parents:
+                return path[::-1]
+            path.append(parents[0])
 
     # Group histograms by their Observable's direct parent Selection.
     # This ensures Histogram_A (under Selection_A) uses only Selection_A's
@@ -1862,18 +1863,31 @@ def compile_graph_topology() -> dict:
 
     parent_sel_order.sort(key=_sel_sort_key)
 
+    # Display names for every Selection box that feeds a histogram, numbered in
+    # cut-flow order, so AND-chained boxes without their own Observable still get
+    # a name and their own cut-flow stage.
+    prefixes = {sid: _prefix_chain(sid) for sid in parent_sel_order}
+    stage_nids = sorted({n for p in prefixes.values() for n in p}, key=_sel_sort_key)
+    sel_display = {
+        n: REGISTRY.node_names.get(n, "").strip() or f"Selection {k}"
+        for k, n in enumerate(stage_nids, 1)
+    }
+
     # Build selections list; each entry uses only the prefix chain for its parent sel_nid
     mult_h5_base = energy + detector + str(mult_cuts)
     plot_idx = 0
     selections = []
 
     for sel_nid in parent_sel_order:
-        prefix = _prefix_chain(sel_nid)
-        sel_exprs = [
-            dpg.get_value(f"txt_sel_{n}").strip()
-            for n in prefix
-            if dpg.does_item_exist(f"txt_sel_{n}") and dpg.get_value(f"txt_sel_{n}").strip()
-        ]
+        prefix = prefixes[sel_nid]
+        sel_exprs = []
+        prefix_n_exprs = []  # number of expressions applied up to each prefix box
+        for n in prefix:
+            expr = (dpg.get_value(f"txt_sel_{n}").strip()
+                    if dpg.does_item_exist(f"txt_sel_{n}") else "")
+            if expr:
+                sel_exprs.append(expr)
+            prefix_n_exprs.append(len(sel_exprs))
         h5_sel = hashlib.md5((mult_h5_base + str(sel_exprs)).encode()).hexdigest()
 
         histograms = []
@@ -1892,7 +1906,9 @@ def compile_graph_topology() -> dict:
         selections.append({
             "nid": sel_nid,
             "prefix_nids": prefix,
-            "node_name": sel_name if sel_name else f"Selection {len(selections) + 1}",
+            "prefix_names": [sel_display[n] for n in prefix],
+            "prefix_n_exprs": prefix_n_exprs,
+            "node_name": sel_display[sel_nid],
             "sel_custom_name": sel_name,   # empty string when not explicitly named
             "sel_exprs": sel_exprs,
             "h5_sel": h5_sel,

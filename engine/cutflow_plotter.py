@@ -1,17 +1,73 @@
 import os
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import mplhep as hep
 from paths import get_fce_home
 
-plt.style.use(hep.style.ROOT)
+
+def _load_sel_counts(hdir, h5_sel, s, n_exprs):
+    """Return (events passing all cuts, per-cut cumulative counts or None) for one cache.
+
+    A missing cache counts as zero events at every stage; a cache written before
+    per-cut counts were stored returns None for them.
+    """
+    cache_path = os.path.join(hdir, "cache", f"sel_{h5_sel}_{s}.npz")
+    if not os.path.exists(cache_path):
+        return 0, [0] * (n_exprs + 1)
+    try:
+        d = np.load(cache_path, mmap_mode="r")
+        cutflow = d["cutflow"].tolist() if "cutflow" in d.files else None
+        return len(d["weight"]), cutflow
+    except Exception:
+        return 0, [0] * (n_exprs + 1)
+
+
+def cutflow_stages(hdir, active_samples, header_cache, selections):
+    """Return [(stage name, {sample: events passing})], starting with "Total".
+
+    Every Selection box is its own stage, including AND-chained boxes that feed
+    no Observable themselves; their counts come from the per-cut counts stored
+    in the cache of the selection they lead into.
+    """
+    stages = [("Total", {s: header_cache.get(s, 0) for s in active_samples})]
+    seen = set()
+    for sel_cfg in selections:
+        h5_sel = sel_cfg["h5_sel"]
+        n_exprs = len(sel_cfg.get("sel_exprs", []))
+        sel_name = (sel_cfg.get("node_name") or "").strip() or "Selection"
+        if "prefix_names" in sel_cfg:
+            steps = list(zip(sel_cfg["prefix_nids"], sel_cfg["prefix_names"],
+                             sel_cfg["prefix_n_exprs"]))
+        else:
+            steps = [(sel_cfg.get("nid"), sel_name, n_exprs)]
+        loaded = {s: _load_sel_counts(hdir, h5_sel, s, n_exprs) for s in active_samples}
+        for nid, name, depth in steps:
+            if nid is not None and nid in seen:
+                continue
+            per_sample = {}
+            for s, (n_final, cutflow) in loaded.items():
+                if depth == n_exprs:
+                    per_sample[s] = n_final
+                elif cutflow is not None and depth < len(cutflow):
+                    per_sample[s] = int(cutflow[depth])
+                else:
+                    per_sample = None
+                    break
+            if per_sample is None:
+                continue  # cache predates per-cut counts; only its final stage is known
+            seen.add(nid)
+            stages.append((name, per_sample))
+    return stages
 
 
 def generate_cutflow_plot(cfg, active_samples, header_cache, selections):
     """Normalized stacked bar cut-flow chart saved as PNG. Returns path or ''."""
     import json
+    # Local imports: keep module import-time deps minimal so cutflow_stages can be
+    # unit-tested without matplotlib (the CI test job does not install it).
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import mplhep as hep
+    plt.style.use(hep.style.ROOT)
     hdir = get_fce_home()
     try:
         # Load samples.json to get the canonical sample order (matches plotter.py)
@@ -31,25 +87,8 @@ def generate_cutflow_plot(cfg, active_samples, header_cache, selections):
         if not mc_samples:
             return ""
 
-        # Stage 0: total before cuts
-        stages = [("Total", {s: header_cache.get(s, 0) for s in mc_samples})]
+        stages = cutflow_stages(hdir, active_samples, header_cache, selections)
         total_raw_all = sum(header_cache.get(s, 0) for s in active_samples)
-
-        for sel_cfg in selections:
-            h5_sel = sel_cfg["h5_sel"]
-            sel_name = (sel_cfg.get("node_name") or "").strip() or "Selection"
-            per_sample = {}
-            for s in mc_samples:
-                cache_path = os.path.join(hdir, "cache", f"sel_{h5_sel}_{s}.npz")
-                if os.path.exists(cache_path):
-                    try:
-                        d = np.load(cache_path, mmap_mode="r")
-                        per_sample[s] = len(d["weight"])
-                    except Exception:
-                        per_sample[s] = 0
-                else:
-                    per_sample[s] = 0
-            stages.append((sel_name, per_sample))
 
         n_stages = len(stages)
         n_mc = len(mc_samples)
@@ -68,19 +107,10 @@ def generate_cutflow_plot(cfg, active_samples, header_cache, selections):
         )
 
         # Efficiency: all active samples / total_raw_all (matches existing cutflow logic)
-        efficiencies = [100.0]
-        for sel_cfg in selections:
-            h5_sel = sel_cfg["h5_sel"]
-            n_pass = 0
-            for s in active_samples:
-                cache_path = os.path.join(hdir, "cache", f"sel_{h5_sel}_{s}.npz")
-                if os.path.exists(cache_path):
-                    try:
-                        d = np.load(cache_path, mmap_mode="r")
-                        n_pass += len(d["weight"])
-                    except Exception:
-                        pass
-            efficiencies.append(100.0 * n_pass / total_raw_all if total_raw_all > 0 else 0.0)
+        efficiencies = [100.0] + [
+            100.0 * sum(per_s.values()) / total_raw_all if total_raw_all > 0 else 0.0
+            for _, per_s in stages[1:]
+        ]
 
         fig_w = max(6.36, 1.5 * n_stages + 2.0)
         fig, ax = plt.subplots(figsize=(fig_w, 5.5), dpi=200)

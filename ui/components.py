@@ -206,15 +206,28 @@ def _load_png_to_texture(png_path: str, texture_tag: str) -> bool:
         return False
 
 
+def _fit_into(img, width: int, height: int):
+    """Scale img to fit width x height keeping its aspect ratio, centred on white.
+
+    The cut-flow figure widens with the number of Selection stages; stretching it
+    into the fixed-size texture would squash its bars and labels.
+    """
+    scale = min(width / img.width, height / img.height)
+    size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+    canvas = Image.new("RGBA", (width, height), (255, 255, 255, 255))
+    canvas.paste(img.resize(size, Image.Resampling.LANCZOS),
+                 ((width - size[0]) // 2, (height - size[1]) // 2))
+    return canvas
+
+
 def _load_cutflow_to_texture() -> bool:
     """Load cutflow.png into the cutflow_texture_buffer. Returns True on success."""
     png_path = os.path.join(FCE_DIR, "cutflow.png")
     if not os.path.exists(png_path):
         return False
     try:
-        img = Image.open(png_path).convert("RGBA")
-        img_resized = img.resize((1272, 1100), Image.Resampling.LANCZOS)
-        pixel_array = np.array(img_resized, dtype=np.float32) / 255.0
+        img = _fit_into(Image.open(png_path).convert("RGBA"), 1272, 1100)
+        pixel_array = np.array(img, dtype=np.float32) / 255.0
         if dpg.does_item_exist("cutflow_texture_buffer"):
             dpg.set_value("cutflow_texture_buffer", pixel_array.ravel().tolist())
         return True
