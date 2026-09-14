@@ -149,6 +149,26 @@ def _make_met(pt, phi) -> _P:
     return _P(pt=pt, phi=phi)
 
 
+# The ntuples store MET_e = 365 GeV - (visible energy) at every collision energy.
+_MET_E_OFFSET = 365.0
+
+
+def _single_photon_met(met_pt, met_phi, met_eta, met_e, ph_pt, ph_phi):
+    """Return the (pt, phi) MET for an event whose only object is one photon.
+
+    In some samples (X4 at 91 GeV above all, and the pseudo-data made the same
+    way) the stored MET of such events is the recoil of a single soft massless
+    particle that is not the stored photon, so it does not balance it. A MET of
+    that single-particle-recoil form means the photon is the only visible
+    particle, so the MET is replaced by its recoil, -photon. Any other MET is
+    returned unchanged.
+    """
+    p_miss = met_pt * math.cosh(met_eta)
+    if abs((_MET_E_OFFSET - met_e) - p_miss) > 0.01 * p_miss:
+        return met_pt, met_phi
+    return ph_pt, math.remainder(ph_phi + math.pi, 2 * math.pi)
+
+
 # ---------------------------------------------------------------------------
 # Cache helpers
 # ---------------------------------------------------------------------------
@@ -163,6 +183,10 @@ _CACHE_KEYS = [
     "ph2_pt", "ph2_eta", "ph2_phi", "ph2_e",
     "met_pt", "met_phi",
 ]
+
+# Part of every selection-cache key: bump when the event content written to the
+# caches changes, so caches built by an older version are not reused.
+CACHE_VERSION = 2
 
 _INIT_CAP = 4096
 
@@ -465,6 +489,8 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
     w_arr       = arrays["weight"]
     met_pt_arr  = arrays["MET_pt"]
     met_phi_arr = arrays.get("MET_phi")
+    met_eta_arr = arrays.get("MET_eta")
+    met_e_arr   = arrays.get("MET_e")
 
     el_pt     = arrays["electron_pt"]  if has_el else None
     el_eta    = arrays["electron_eta"] if has_el else None
@@ -600,6 +626,11 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
             j2  = _make_jet(jets[1])        if len(jets)    >= 2 else _NULL
             ph1 = _make_photon(photons[0])  if len(photons) >= 1 else _NULL
             ph2 = _make_photon(photons[1])  if len(photons) >= 2 else _NULL
+            if (nphot == 1 and nlep == 0 and njets == 0
+                    and met_eta_arr is not None and met_e_arr is not None):
+                met_pt, met_phi = _single_photon_met(
+                    met_pt, met_phi, float(met_eta_arr[i]), float(met_e_arr[i]),
+                    photons[0]["pt"], photons[0]["phi"])
             met = _make_met(met_pt, met_phi)
 
             local_vars = {

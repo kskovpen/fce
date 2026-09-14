@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.path_filter import (
     _delta_r, _P4Proxy, _ArrayProxy, _delta_r_vec,
     make_cache_acc, save_cache, _CACHE_KEYS,
+    _single_photon_met, filter_raw_event_data,
 )
 
 
@@ -119,3 +120,47 @@ def test_save_cache_and_reload(tmp_path):
     assert abs(float(data["weight"][0]) - 1.5) < 1e-5
     assert int(data["nlep"][0]) == 2
     assert int(data["nbjets"][0]) == 1
+
+
+# MET stored as the recoil of one massless particle (pT 12 GeV, eta 0.5) that is
+# not the event's photon; MET_e is 365 GeV minus the visible energy.
+_RECOIL_MET_E = 365.0 - 12.0 * math.cosh(0.5)
+
+
+def test_single_photon_met_replaces_single_particle_recoil():
+    pt, phi = _single_photon_met(12.0, 0.3, 0.5, _RECOIL_MET_E, 30.0, 2.9)
+    assert pt == 30.0
+    assert abs(phi - (2.9 - math.pi)) < 1e-12
+
+
+def test_single_photon_met_keeps_multi_particle_recoil():
+    # Visible energy (80 GeV) well above |p_miss|: not a single-particle recoil
+    assert _single_photon_met(12.0, 0.3, 0.5, 365.0 - 80.0, 30.0, 2.9) == (12.0, 0.3)
+
+
+def _jagged(*rows):
+    out = np.empty(len(rows), dtype=object)
+    for k, r in enumerate(rows):
+        out[k] = np.asarray(r, dtype=np.float32)
+    return out
+
+
+def test_filter_balances_met_only_in_photon_only_events():
+    # Event 0: a photon and nothing else. Event 1: the same plus a jet.
+    arrays = {
+        "weight": np.array([1.0, 1.0]),
+        "MET_pt": np.array([12.0, 12.0]), "MET_phi": np.array([0.3, 0.3]),
+        "MET_eta": np.array([0.5, 0.5]),
+        "MET_e": np.array([_RECOIL_MET_E, _RECOIL_MET_E]),
+        "photon_pt": _jagged([30.0], [30.0]), "photon_eta": _jagged([0.1], [0.1]),
+        "photon_phi": _jagged([2.9], [2.9]), "photon_e": _jagged([30.2], [30.2]),
+        "jet_pt": _jagged([], [25.0]), "jet_eta": _jagged([], [0.0]),
+        "jet_phi": _jagged([], [1.0]), "jet_e": _jagged([], [26.0]),
+    }
+    acc = make_cache_acc()
+    filter_raw_event_data(arrays, 2, {}, None, "", cache_acc=acc)
+    assert acc["_n"] == 2
+    assert abs(float(acc["met_pt"][0]) - 30.0) < 1e-4
+    assert abs(float(acc["met_phi"][0]) - (2.9 - math.pi)) < 1e-4
+    assert abs(float(acc["met_pt"][1]) - 12.0) < 1e-4
+    assert abs(float(acc["met_phi"][1]) - 0.3) < 1e-4

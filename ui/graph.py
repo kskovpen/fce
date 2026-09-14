@@ -1874,7 +1874,8 @@ def compile_graph_topology() -> dict:
     }
 
     # Build selections list; each entry uses only the prefix chain for its parent sel_nid
-    mult_h5_base = energy + detector + str(mult_cuts)
+    from engine.path_filter import CACHE_VERSION
+    mult_h5_base = f"v{CACHE_VERSION}" + energy + detector + str(mult_cuts)
     plot_idx = 0
     selections = []
 
