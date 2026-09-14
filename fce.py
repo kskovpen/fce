@@ -26,7 +26,7 @@ from ui.graph import (link_callback, delink_callback, create_node,
 from ui.state import REGISTRY
 from ui.components import (trigger_analysis_pipeline, trigger_dataset_download,
                            confirm_redownload, MAX_HIST_TEXTURES,
-                           save_discovery_process_name)
+                           save_discovery_process_name, open_png_export_dialog)
 from ui.state import update_run_state as _set_state
 from ui.tutorial import show_tutorial
 import ui.state as _ui_state
@@ -657,6 +657,9 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                     width=636,
                     height=550,
                 )
+                # Shown once a cut-flow has been drawn in this session.
+                dpg.add_button(label="Save PNG", width=100, tag="cutflow_save_btn",
+                               show=False, callback=open_png_export_dialog)
             with dpg.collapsing_header(label="Console", default_open=True,
                                         tag="console_header"):
                 with dpg.child_window(

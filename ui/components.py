@@ -8,6 +8,7 @@ from ui.graph import (compile_graph_topology, check_pipeline_connectivity,
                       clear_all_node_errors, apply_node_runtime_states,
                       _clear_node_runtime_theme, _set_node_done, _set_node_cached)
 from ui.state import get_run_state, update_run_state
+from ui.export import png_export_name, export_png
 from paths import get_fce_home
 
 safe_get_state = get_run_state
@@ -187,6 +188,37 @@ def log_to_message_center(message_text):
                              dpg.get_y_scroll_max("console_scroll_container"))
 
 
+def _on_export_png(sender, app_data, user_data):
+    dest = (app_data or {}).get("file_path_name", "").strip()
+    if not dest:
+        return
+    if safe_get_state("running"):
+        log_to_message_center("Wait for the run to finish before saving plots.")
+        return
+    try:
+        log_to_message_center(f"Plot saved: {export_png(user_data, dest)}")
+    except Exception as e:
+        log_to_message_center(f"Save failed: {e}")
+
+
+def open_png_export_dialog(sender=None, app_data=None, user_data=None):
+    """Ask where to save a plot. user_data: plot index, or None for the cut-flow chart."""
+    name = "cutflow.png" if user_data is None else f"hist_{user_data}.png"
+    src = os.path.join(FCE_DIR, name)
+    if not os.path.exists(src):
+        log_to_message_center("Nothing to save yet: run the analysis first.")
+        return
+    # Rebuilt each time so the suggested file name matches the plot.
+    if dpg.does_item_exist("export_png_dialog"):
+        dpg.delete_item("export_png_dialog")
+    with dpg.file_dialog(
+        directory_selector=False, modal=True, width=700, height=400,
+        tag="export_png_dialog", callback=_on_export_png, user_data=src,
+        default_filename=png_export_name(_LAST_CFG, user_data),
+    ):
+        dpg.add_file_extension(".png", color=(255, 255, 100, 255))
+
+
 from PIL import Image
 import numpy as np
 
@@ -255,6 +287,14 @@ def _add_fit_label(plot_idx: int, fit_results: dict, parent: str,
     dpg.add_spacer(height=2, parent=parent)
 
 
+def _add_plot(plot_idx: int, parent, tag: str) -> None:
+    """Add a plot image with a Save PNG button under it."""
+    dpg.add_image(f"plot_texture_buffer_{plot_idx}", tag=tag,
+                  width=636, height=454, parent=parent)
+    dpg.add_button(label="Save PNG", width=100, parent=parent,
+                   callback=open_png_export_dialog, user_data=plot_idx)
+
+
 def refresh_ui_canvas(selections_info: list | None = None,
                       n_histograms: int = 1, hist_labels: list | None = None,
                       fit_results: dict | None = None):
@@ -301,15 +341,11 @@ def refresh_ui_canvas(selections_info: list | None = None,
                 label=sel["name"],
                 default_open=True,
                 parent="plot_display_group",
-            ):
+            ) as header:
                 multi = len(indices) > 1
                 for i in indices:
-                    _add_fit_label(i, fit_results, parent=dpg.last_item(), multi_hist=multi)
-                    dpg.add_image(
-                        f"plot_texture_buffer_{i}",
-                        tag=f"canvas_view_frame_{i}",
-                        width=636, height=454,
-                    )
+                    _add_fit_label(i, fit_results, parent=header, multi_hist=multi)
+                    _add_plot(i, parent=header, tag=f"canvas_view_frame_{i}")
     else:
         # Single selection (or legacy call): show plots stacked, no outer dropdown
         indices = (
@@ -321,22 +357,12 @@ def refresh_ui_canvas(selections_info: list | None = None,
         if len(indices) == 1:
             _add_fit_label(indices[0], fit_results, parent="plot_display_group",
                            multi_hist=False)
-            dpg.add_image(
-                f"plot_texture_buffer_{indices[0]}",
-                tag="canvas_view_frame_0",
-                width=636, height=454,
-                parent="plot_display_group",
-            )
+            _add_plot(indices[0], parent="plot_display_group", tag="canvas_view_frame_0")
         else:
             for i in indices:
                 _add_fit_label(i, fit_results, parent="plot_display_group",
                                multi_hist=multi)
-                dpg.add_image(
-                    f"plot_texture_buffer_{i}",
-                    tag=f"canvas_view_frame_{i}",
-                    width=636, height=454,
-                    parent="plot_display_group",
-                )
+                _add_plot(i, parent="plot_display_group", tag=f"canvas_view_frame_{i}")
 
 
 def _frame_poll_callback(sender=None, app_data=None, user_data=None):
@@ -370,7 +396,8 @@ def _frame_poll_callback(sender=None, app_data=None, user_data=None):
             log_to_message_center("Completed.")
 
             if safe_get_state("cutflow_ready"):
-                _load_cutflow_to_texture()
+                if _load_cutflow_to_texture() and dpg.does_item_exist("cutflow_save_btn"):
+                    dpg.configure_item("cutflow_save_btn", show=True)
                 safe_set_state("cutflow_ready", False)
 
             # Discovery popup for new 5-sigma results (skip already-discovered)
