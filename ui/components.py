@@ -9,6 +9,7 @@ from ui.graph import (compile_graph_topology, check_pipeline_connectivity,
                       _clear_node_runtime_theme, _set_node_done, _set_node_cached)
 from ui.state import get_run_state, update_run_state
 from ui.export import png_export_name, export_png
+from ui.zoom_ui import center_window
 from paths import get_fce_home
 
 safe_get_state = get_run_state
@@ -101,9 +102,7 @@ def _show_next_discovery() -> None:
     if dpg.does_item_exist("discovery_process_name_input"):
         dpg.set_value("discovery_process_name_input",
                       _NAMED_PROCESSES.get(pidx, ""))
-    vp_w = dpg.get_viewport_width()
-    vp_h = dpg.get_viewport_height()
-    dpg.set_item_pos("discovery_window", [(vp_w - 460) // 2, (vp_h - 320) // 2])
+    center_window("discovery_window")
     dpg.configure_item("discovery_window", show=True)
     dpg.focus_item("discovery_window")
 
@@ -753,10 +752,7 @@ def trigger_dataset_download(sender=None, app_data=None, user_data=None):
                           f"Data for {label} is already downloaded.\n"
                           "Do you want to re-download it?")
         if dpg.does_item_exist("redownload_confirm_window"):
-            vp_w = dpg.get_viewport_width()
-            vp_h = dpg.get_viewport_height()
-            dpg.set_item_pos("redownload_confirm_window",
-                             [(vp_w - 380) // 2, (vp_h - 130) // 2])
+            center_window("redownload_confirm_window")
             dpg.configure_item("redownload_confirm_window", show=True)
             dpg.focus_item("redownload_confirm_window")
         return

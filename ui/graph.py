@@ -3,6 +3,7 @@ from collections import deque
 import dearpygui.dearpygui as dpg
 import ui.state as _state
 from ui.state import REGISTRY, NODE_LABELS
+from ui.zoom_ui import zoom_modifier_down
 
 # ---------------------------------------------------------------------------
 # Variable catalogue for autocomplete
@@ -284,6 +285,8 @@ def _on_wheel_pan(sender=None, app_data=None, user_data=None):
     if not dpg.does_item_exist("node_editor_container"):
         return
     if not dpg.is_item_hovered("node_editor_container"):
+        return
+    if zoom_modifier_down():  # Ctrl/Cmd + wheel zooms the interface instead
         return
     delta = app_data  # +1 = scroll up, -1 = scroll down
     shift = dpg.is_key_down(dpg.mvKey_LShift) or dpg.is_key_down(dpg.mvKey_RShift)

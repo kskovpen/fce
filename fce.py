@@ -27,6 +27,10 @@ from ui.state import REGISTRY
 from ui.components import (trigger_analysis_pipeline, trigger_dataset_download,
                            confirm_redownload, MAX_HIST_TEXTURES,
                            save_discovery_process_name, open_png_export_dialog)
+from ui.zoom import ZOOM_STEPS, font_px
+from ui.zoom_ui import (setup_zoom, start_zoom, zoom_in, zoom_out, zoom_preset,
+                        zoom_menu_tag, center_window)
+from ui.screen import screen_size, fit_window
 from ui.state import update_run_state as _set_state
 from ui.tutorial import show_tutorial
 import ui.state as _ui_state
@@ -90,6 +94,7 @@ with dpg.texture_registry():
 # ── Font registry ─────────────────────────────────────────────────────────────
 _large_font = None
 _extended_font = None
+_ui_font_path = None
 with dpg.font_registry():
     _font_candidates = [
         "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -106,9 +111,27 @@ with dpg.font_registry():
                 # render correctly on node name buttons.
                 with dpg.font(_fp, 13) as _extended_font:
                     pass
+                _ui_font_path = _fp
                 break
             except Exception:
                 pass
+
+    # Fonts for the zoom steps other than 100% (fonts must exist before the
+    # viewport is set up). ProggyClean is the built-in UI font: re-rendering it
+    # at each size keeps text sharp, where scaling the 13 px font would blur it.
+    _zoom_fonts = {1.0: {"base": 0, "large": _large_font, "ext": _extended_font}}
+    _proggy_path = os.path.join(_HERE, "fonts", "ProggyClean.ttf")
+    for _z in ZOOM_STEPS:
+        if _z == 1.0:
+            continue
+        try:
+            _zoom_fonts[_z] = {
+                "base": dpg.add_font(_proggy_path, font_px(13, _z), pixel_snapH=True),
+                "large": dpg.add_font(_ui_font_path, font_px(20, _z)) if _ui_font_path else None,
+                "ext": dpg.add_font(_ui_font_path, font_px(13, _z)) if _ui_font_path else None,
+            }
+        except Exception:
+            pass
 
 _ui_state.EXTENDED_FONT = _extended_font
 _ui_state.LARGE_FONT = _large_font
@@ -386,18 +409,13 @@ def _show_exercises_window(sender=None, app_data=None, user_data=None):
                 label="Close", width=90,
                 callback=lambda: dpg.configure_item("exercises_window", show=False),
             )
-    vp_w = dpg.get_viewport_width()
-    vp_h = dpg.get_viewport_height()
-    dpg.set_item_pos("exercises_window",
-                     [(vp_w - _EXERCISES_W) // 2, (vp_h - _EXERCISES_H) // 2])
+    center_window("exercises_window")
     dpg.configure_item("exercises_window", show=True)
     dpg.focus_item("exercises_window")
 
 
 def _show_about_window(sender=None, app_data=None, user_data=None):
-    vp_w = dpg.get_viewport_width()
-    vp_h = dpg.get_viewport_height()
-    dpg.set_item_pos("about_window", [(vp_w - 360) // 2, (vp_h - 280) // 2])
+    center_window("about_window")
     dpg.configure_item("about_window", show=True)
 
 
@@ -441,11 +459,7 @@ def _show_palette_help(sender=None, app_data=None, user_data=None):
                 label="Close", width=90,
                 callback=lambda: dpg.configure_item("palette_help_window", show=False),
             )
-    vp_w = dpg.get_viewport_width()
-    vp_h = dpg.get_viewport_height()
-    dpg.set_item_pos("palette_help_window",
-                     [(vp_w - _PALETTE_HELP_W) // 2,
-                      (vp_h - _PALETTE_HELP_H) // 2])
+    center_window("palette_help_window")
     dpg.configure_item("palette_help_window", show=True)
     dpg.focus_item("palette_help_window")
 
@@ -526,6 +540,16 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                 callback=lambda: create_node("Histogram"),
             )
 
+        with dpg.menu(label="View"):
+            for _z in ZOOM_STEPS:
+                dpg.add_menu_item(label=f"Zoom {round(_z * 100)}%", tag=zoom_menu_tag(_z),
+                                  check=True, default_value=(_z == 1.0),
+                                  shortcut="Ctrl/Cmd 0" if _z == 1.0 else "",
+                                  callback=zoom_preset, user_data=_z)
+            dpg.add_separator()
+            dpg.add_menu_item(label="Zoom In", shortcut="Ctrl/Cmd +", callback=zoom_in)
+            dpg.add_menu_item(label="Zoom Out", shortcut="Ctrl/Cmd -", callback=zoom_out)
+
         with dpg.menu(label="About"):
             dpg.add_menu_item(
                 label="About FCE Studio...",
@@ -559,13 +583,14 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                 pass
 
         # Right: controls + plot + console
-        with dpg.child_window(width=660, height=-85, border=False):
+        with dpg.child_window(width=660, height=-85, border=False, tag="right_panel"):
 
             dpg.add_spacer(height=6)
             dpg.add_text(
                 "Pipeline:  Data  ->  Multiplicity  ->  Selection  ->  Observable  ->  Histogram",
                 color=(100, 150, 200, 180),
                 tag="pipeline_flow_label",
+                wrap=0,  # wraps inside the panel when zoomed in
             )
             dpg.add_spacer(height=6)
             dpg.add_progress_bar(
@@ -629,18 +654,22 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
             )
             dpg.add_spacer(height=5)
             # ── Node-state colour legend ───────────────────────────────────
-            with dpg.group(horizontal=True):
-                dpg.add_text("Node states:", color=(155, 155, 155))
-                dpg.add_spacer(width=6)
-                dpg.add_text("[Done]",    color=(48, 195, 70))
-                dpg.add_spacer(width=4)
-                dpg.add_text("[Cached]",  color=(30, 190, 210))
-                dpg.add_spacer(width=4)
-                dpg.add_text("[Active]",  color=(215, 145, 25))
-                dpg.add_spacer(width=4)
-                dpg.add_text("[Stopped]", color=(200, 110, 20))
-                dpg.add_spacer(width=4)
-                dpg.add_text("[Error]",   color=(210, 50, 50))
+            # Two halves side by side; stacked on two lines when zoomed in so
+            # the legend fits the panel (see ui/zoom_ui.py).
+            with dpg.group(horizontal=True, tag="node_state_legend"):
+                with dpg.group(horizontal=True):
+                    dpg.add_text("Node states:", color=(155, 155, 155))
+                    dpg.add_spacer(width=6)
+                    dpg.add_text("[Done]",    color=(48, 195, 70))
+                    dpg.add_spacer(width=4)
+                    dpg.add_text("[Cached]",  color=(30, 190, 210))
+                    dpg.add_spacer(width=4)
+                    dpg.add_text("[Active]",  color=(215, 145, 25))
+                with dpg.group(horizontal=True):
+                    dpg.add_spacer(width=4)
+                    dpg.add_text("[Stopped]", color=(200, 110, 20))
+                    dpg.add_spacer(width=4)
+                    dpg.add_text("[Error]",   color=(210, 50, 50))
             dpg.add_spacer(height=4)
             with dpg.group(tag="plot_display_group"):
                 dpg.add_image(
@@ -830,12 +859,16 @@ for _out_nid, _in_nid in [(0, 1), (1, 2), (2, 3), (3, 4)]:
         pass
 
 setup_link_handlers()
+setup_zoom(_zoom_fonts)
 
 # ── Viewport ──────────────────────────────────────────────────────────────────
+# maximize_viewport() has no effect on macOS, where a 920 px tall window can be
+# taller than the screen (hiding the node palette), so fit it to the screen.
+_vp_w, _vp_h = fit_window(1440, 920, screen_size())
 dpg.create_viewport(
     title="Future Collider Experiment",
-    width=1440,
-    height=920,
+    width=_vp_w,
+    height=_vp_h,
     resizable=True,
     small_icon=os.path.join(_HERE, "fce.ico") if os.path.exists(os.path.join(_HERE, "fce.ico")) else "",
     large_icon=os.path.join(_HERE, "fce.ico") if os.path.exists(os.path.join(_HERE, "fce.ico")) else "",
@@ -844,6 +877,13 @@ dpg.setup_dearpygui()
 dpg.show_viewport()
 dpg.set_primary_window("primary_studio_window", True)
 dpg.maximize_viewport()
-dpg.set_frame_callback(frame=1, callback=show_tutorial)
+
+
+def _on_first_frame():
+    start_zoom()  # restore the saved zoom before the tutorial window opens
+    show_tutorial()
+
+
+dpg.set_frame_callback(frame=1, callback=_on_first_frame)
 dpg.start_dearpygui()
 dpg.destroy_context()

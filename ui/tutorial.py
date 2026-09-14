@@ -1,6 +1,7 @@
 """Launch tutorial shown on application startup."""
 import dearpygui.dearpygui as dpg
 import ui.state as _state
+from ui.zoom_ui import center_window
 
 _WIN_TAG = "tutorial_window"
 _WIN_W = 640
@@ -109,6 +110,9 @@ _PAGES = [
         "  -  Right-click + drag: pan all nodes\n"
         "  -  Scroll wheel: pan vertically\n"
         "  -  Shift + Scroll: pan horizontally\n"
+        "  -  Ctrl/Cmd + Scroll, or Ctrl/Cmd + = / -: zoom the whole interface\n"
+        "     (100%, 125%, 150%, 200%; also in the View menu)\n"
+        "  -  Ctrl/Cmd + 0: back to 100%\n"
         "  -  Drag a node header: move a single node\n"
         "  -  Select a node or link, then Delete / Backspace: remove it\n"
         "  -  x button on a node: delete that node",
@@ -293,9 +297,6 @@ def show_tutorial():
     if _PAGE[0] >= len(_PAGES):
         _PAGE[0] = 0
     _refresh()
-    vp_w = dpg.get_viewport_width()
-    vp_h = dpg.get_viewport_height()
-    dpg.set_item_pos(_WIN_TAG, [max(0, (vp_w - _WIN_W) // 2),
-                                max(0, (vp_h - _WIN_H) // 2)])
+    center_window(_WIN_TAG)
     dpg.configure_item(_WIN_TAG, show=True)
     dpg.focus_item(_WIN_TAG)

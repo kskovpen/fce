@@ -47,6 +47,8 @@ package-dir = {"fce_studio" = ".", "fce_studio.ui" = "ui", "fce_studio.engine" =
 [tool.setuptools.package-data]
 "fce_studio" = [
     "config/*.json",
+    "fonts/*.ttf",
+    "fonts/*.txt",
     "fce.ico",
     "fce.svg",
     "fce-screen.png",
