@@ -11,16 +11,29 @@ def test_zoom_presets():
     assert ZOOM_STEPS == (1.0, 1.25, 1.5, 2.0)
 
 
-def test_auto_zoom_picks_the_largest_preset_that_fits():
-    assert auto_zoom((1440, 900)) == 1.0     # 13" MacBook (points)
-    assert auto_zoom((1512, 982)) == 1.0
-    assert auto_zoom((1920, 1080)) == 1.0    # full HD: 125% would not fit vertically
-    assert auto_zoom((1920, 1200)) == 1.25
-    assert auto_zoom((2560, 1440)) == 1.5
-    assert auto_zoom((2880, 1800)) == 2.0    # HiDPI laptop drawn in pixels (Linux)
-    assert auto_zoom((3840, 2160)) == 2.0    # 4K
-    assert auto_zoom((1280, 800)) == 1.0     # smaller than the design size
-    assert auto_zoom(None) == 1.0
+def test_auto_zoom_follows_the_desktop_scale():
+    # An unscaled desktop keeps 100% whatever the resolution (e.g. every Mac)
+    assert auto_zoom(1.0, (1440, 900)) == 1.0
+    assert auto_zoom(1.0, (2560, 1440)) == 1.0
+    assert auto_zoom(1.0, (2880, 1800)) == 1.0
+    # A scaled Linux desktop drawn in pixels
+    assert auto_zoom(2.0, (2880, 1800)) == 2.0
+    assert auto_zoom(1.5, (2560, 1440)) == 1.5
+    assert auto_zoom(1.25, (1920, 1200)) == 1.25
+    assert auto_zoom(1.75, (3840, 2160)) == 1.5   # between presets: the smaller
+    assert auto_zoom(1.1, (3840, 2160)) == 1.0    # closest preset
+    assert auto_zoom(3.0, (3840, 2160)) == 2.0    # largest preset
+
+
+def test_auto_zoom_never_exceeds_the_screen():
+    assert auto_zoom(2.0, (1920, 1200)) == 1.25
+    assert auto_zoom(2.0, (1920, 1080)) == 1.0
+    assert auto_zoom(1.5, None) == 1.5            # screen unknown: no limit
+
+
+def test_auto_zoom_bad_scale_means_100_percent():
+    assert auto_zoom(None, (2880, 1800)) == 1.0
+    assert auto_zoom("not a number", (2880, 1800)) == 1.0
 
 
 def test_scale_size_keeps_fill_and_auto():

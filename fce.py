@@ -29,7 +29,7 @@ from ui.components import (trigger_analysis_pipeline, trigger_dataset_download,
                            save_discovery_process_name, open_png_export_dialog)
 from ui.zoom import auto_zoom, font_px
 from ui.zoom_ui import start_zoom, center_window
-from ui.screen import screen_size, fit_window
+from ui.screen import screen_size, desktop_scale, fit_window
 from ui.state import update_run_state as _set_state
 from ui.tutorial import show_tutorial
 import ui.state as _ui_state
@@ -91,11 +91,12 @@ with dpg.texture_registry():
                 pass
 
 # ── Interface zoom for this screen ────────────────────────────────────────────
-# The layout is designed for a 1440x900 screen; on larger screens (e.g. HiDPI
-# Linux displays drawn in raw pixels) everything is scaled up to the largest
-# preset that still fits.
+# Linux (and DPI-aware Windows) draw the app in raw pixels, ignoring the
+# desktop's scaling, so the interface is zoomed by that scale factor (limited to
+# what fits the screen). macOS already works in points and stays at 100%.
+# FCE_ZOOM=1.5 (etc.) overrides the detected factor.
 _screen = screen_size()
-_zoom = auto_zoom(_screen)
+_zoom = auto_zoom(os.environ.get("FCE_ZOOM") or desktop_scale(), _screen)
 
 # ── Font registry ─────────────────────────────────────────────────────────────
 _large_font = None

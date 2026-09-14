@@ -7,11 +7,16 @@ ZOOM_STEPS = (1.0, 1.25, 1.5, 2.0)
 DESIGN_SIZE = (1440, 900)
 
 
-def auto_zoom(screen, design=DESIGN_SIZE) -> float:
-    """The largest preset at which the layout still fits the screen; 1.0 if the screen is unknown."""
-    if not screen:
-        return 1.0
-    fits = [z for z in ZOOM_STEPS if design[0] * z <= screen[0] and design[1] * z <= screen[1]]
+def auto_zoom(scale, screen, design=DESIGN_SIZE) -> float:
+    """Zoom for the desktop's scale factor: the closest preset (ties go to the
+    smaller one), reduced until the layout fits the screen (if it is known)."""
+    try:
+        scale = float(scale)
+    except (TypeError, ValueError):
+        scale = 1.0
+    wanted = min(ZOOM_STEPS, key=lambda z: (abs(z - scale), z))
+    fits = [z for z in ZOOM_STEPS if z <= wanted and (
+        not screen or (design[0] * z <= screen[0] and design[1] * z <= screen[1]))]
     return max(fits, default=1.0)
 
 

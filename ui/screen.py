@@ -1,4 +1,6 @@
-"""Main display size, used to open the window at a size and zoom that fit the screen."""
+"""Screen size and desktop scale factor, used to open the window at a size and
+zoom that suit the screen."""
+import os
 import re
 import subprocess
 import sys
@@ -16,6 +18,18 @@ def parse_xrandr(text: str):
                 return size
             first = first or size
     return first
+
+
+def parse_xft_dpi(text: str):
+    """The Xft.dpi value in an X resource string (as `xrdb -query` prints it), or None."""
+    for line in (text or "").splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "Xft.dpi":
+            try:
+                return float(value.strip())
+            except ValueError:
+                return None
+    return None
 
 
 def _macos_size():
@@ -47,7 +61,8 @@ def _load(name: str, soname: str):
 
 
 def _xrandr_primary(x11, display):
-    """Size of the primary (else first) monitor reported by the RandR extension."""
+    """(width, height, width_mm, height_mm) of the primary (else first) monitor
+    reported by the RandR extension."""
     import ctypes
 
     class _Monitor(ctypes.Structure):  # XRRMonitorInfo
@@ -73,27 +88,56 @@ def _xrandr_primary(x11, display):
     try:
         found = [monitors[i] for i in range(count.value)]
         chosen = next((m for m in found if m.primary), found[0] if found else None)
-        return (chosen.width, chosen.height) if chosen else None
+        if not chosen:
+            return None
+        return chosen.width, chosen.height, chosen.mwidth, chosen.mheight
     finally:
         xrr.XRRFreeMonitors(monitors)
 
 
-def _x11_size():
-    """Screen size from the X server (Xorg, or XWayland on Wayland desktops) via
-    the X libraries, which the app's window layer needs on any distribution."""
+def _open_x11():
+    """(libX11, display) for the X server (Xorg, or XWayland on Wayland desktops),
+    whose libraries the app's window layer needs on any distribution; None
+    without a display. Close with x11.XCloseDisplay(display)."""
     import ctypes
     x11 = _load("X11", "libX11.so.6")
     x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
     x11.XOpenDisplay.restype = ctypes.c_void_p
     x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
     display = x11.XOpenDisplay(None)
-    if not display:
+    return (x11, display) if display else None
+
+
+def _x11_scale():
+    """Desktop scale factor from the X resource Xft.dpi (GNOME and KDE set it to
+    96 x their scaling), or None if it is not set."""
+    import ctypes
+    opened = _open_x11()
+    if not opened:
         return None
+    x11, display = opened
+    try:
+        x11.XResourceManagerString.argtypes = [ctypes.c_void_p]
+        x11.XResourceManagerString.restype = ctypes.c_char_p
+        resources = x11.XResourceManagerString(display)
+        dpi = parse_xft_dpi(resources.decode("utf-8", "replace") if resources else "")
+        return dpi / 96 if dpi else None
+    finally:
+        x11.XCloseDisplay(display)
+
+
+def _x11_size():
+    """Screen size from the X server via the X libraries."""
+    import ctypes
+    opened = _open_x11()
+    if not opened:
+        return None
+    x11, display = opened
     try:
         try:
-            size = _xrandr_primary(x11, display)
-            if size:
-                return size
+            monitor = _xrandr_primary(x11, display)
+            if monitor:
+                return monitor[:2]
         except Exception:
             pass
         # Without RandR: the whole X screen (all monitors together)
@@ -133,6 +177,64 @@ def screen_size():
     if size and size[0] > 0 and size[1] > 0:
         return size
     return None
+
+
+# GNOME's own rule for choosing 200% by itself: at least 192 dpi and 1200 px tall.
+_HIDPI_DPI, _HIDPI_MIN_HEIGHT = 192, 1200
+
+
+def _x11_physical_scale():
+    """2.0 for a HiDPI monitor by GNOME's rule, 1.0 otherwise; None if the
+    monitor's physical size is unknown."""
+    opened = _open_x11()
+    if not opened:
+        return None
+    x11, display = opened
+    try:
+        monitor = _xrandr_primary(x11, display)
+    finally:
+        x11.XCloseDisplay(display)
+    if not monitor or monitor[2] <= 0:
+        return None
+    dpi = monitor[0] * 25.4 / monitor[2]
+    return 2.0 if dpi >= _HIDPI_DPI and monitor[1] >= _HIDPI_MIN_HEIGHT else 1.0
+
+
+def _env_scale():
+    """Scale factor from GDK_SCALE or QT_SCALE_FACTOR, or None."""
+    for var in ("GDK_SCALE", "QT_SCALE_FACTOR"):
+        try:
+            scale = float(os.environ.get(var, ""))
+        except ValueError:
+            continue
+        if scale > 0:
+            return scale
+    return None
+
+
+def desktop_scale() -> float:
+    """How much the desktop scales applications, which the app has to apply itself.
+
+    1.0 on macOS, where window sizes are already in points. On Windows the
+    system DPI / 96 (96 when Windows scales the app itself). On Linux the
+    desktop's Xft.dpi / 96, else GDK_SCALE or QT_SCALE_FACTOR, else GNOME's
+    HiDPI rule on the monitor's physical size, else 1.0.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            return ctypes.windll.user32.GetDpiForSystem() / 96
+        except Exception:
+            return 1.0
+    if sys.platform.startswith("linux"):
+        for source in (_x11_scale, _env_scale, _x11_physical_scale):
+            try:
+                scale = source()
+            except Exception:
+                continue
+            if scale:
+                return scale
+    return 1.0
 
 
 def fit_window(width: int, height: int, screen, reserved_h: int = 100):
