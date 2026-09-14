@@ -110,9 +110,6 @@ _PAGES = [
         "  -  Right-click + drag: pan all nodes\n"
         "  -  Scroll wheel: pan vertically\n"
         "  -  Shift + Scroll: pan horizontally\n"
-        "  -  Ctrl/Cmd + Scroll, or Ctrl/Cmd + = / -: zoom the whole interface\n"
-        "     (100%, 125%, 150%, 200%; also in the View menu)\n"
-        "  -  Ctrl/Cmd + 0: back to 100%\n"
         "  -  Drag a node header: move a single node\n"
         "  -  Select a node or link, then Delete / Backspace: remove it\n"
         "  -  x button on a node: delete that node",

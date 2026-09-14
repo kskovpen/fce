@@ -1,35 +1,26 @@
-import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ui.zoom import (ZOOM_STEPS, step_zoom, nearest_step, scale_size, font_px,
-                     panel_width, fit_width, load_zoom, save_zoom)
+from ui.zoom import (ZOOM_STEPS, auto_zoom, scale_size, font_px, panel_width,
+                     fit_width)
 
 
 def test_zoom_presets():
     assert ZOOM_STEPS == (1.0, 1.25, 1.5, 2.0)
 
 
-def test_step_zoom_moves_one_preset_and_clamps():
-    assert step_zoom(1.0, +1) == 1.25
-    assert step_zoom(1.5, +1) == 2.0
-    assert step_zoom(1.25, -1) == 1.0
-    assert step_zoom(2.0, +1) == 2.0
-    assert step_zoom(1.0, -1) == 1.0
-    # A zoom between presets moves to the neighbouring preset
-    assert step_zoom(1.3, +1) == 1.5
-    assert step_zoom(1.3, -1) == 1.25
-
-
-def test_nearest_step():
-    assert nearest_step(1.3) == 1.25
-    assert nearest_step(1.75) in (1.5, 2.0)
-    assert nearest_step(0.75) == 1.0   # an old saved zoom-out level
-    assert nearest_step(9) == 2.0
-    assert nearest_step("bad") == 1.0
-    assert nearest_step(None) == 1.0
+def test_auto_zoom_picks_the_largest_preset_that_fits():
+    assert auto_zoom((1440, 900)) == 1.0     # 13" MacBook (points)
+    assert auto_zoom((1512, 982)) == 1.0
+    assert auto_zoom((1920, 1080)) == 1.0    # full HD: 125% would not fit vertically
+    assert auto_zoom((1920, 1200)) == 1.25
+    assert auto_zoom((2560, 1440)) == 1.5
+    assert auto_zoom((2880, 1800)) == 2.0    # HiDPI laptop drawn in pixels (Linux)
+    assert auto_zoom((3840, 2160)) == 2.0    # 4K
+    assert auto_zoom((1280, 800)) == 1.0     # smaller than the design size
+    assert auto_zoom(None) == 1.0
 
 
 def test_scale_size_keeps_fill_and_auto():
@@ -45,7 +36,6 @@ def test_panel_width_is_capped_when_zoomed():
     assert panel_width(660, 1.0, 1000) == 660   # 100% never changes
     assert panel_width(660, 1.5, 3000) == 990   # enough room: follows the zoom
     assert panel_width(660, 2.0, 1440) == 720   # capped at half the window
-    assert panel_width(660, 0.75, 1440) == 495
 
 
 def test_fit_width_keeps_aspect_ratio():
@@ -56,17 +46,4 @@ def test_fit_width_keeps_aspect_ratio():
 def test_font_px():
     assert font_px(13, 1.0) == 13
     assert font_px(13, 1.5) == 20
-    assert font_px(13, 0.75) == 10
     assert font_px(20, 2.0) == 40
-
-
-def test_zoom_setting_roundtrip(tmp_path):
-    path = tmp_path / "ui_settings.json"
-    assert load_zoom(str(path)) == 1.0
-    save_zoom(str(path), 1.5)
-    assert load_zoom(str(path)) == 1.5
-    path.write_text("{not json")
-    assert load_zoom(str(path)) == 1.0
-    path.write_text('{"other": 1}')
-    save_zoom(str(path), 1.25)
-    assert json.loads(path.read_text()) == {"other": 1, "zoom": 1.25}

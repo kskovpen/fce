@@ -27,9 +27,8 @@ from ui.state import REGISTRY
 from ui.components import (trigger_analysis_pipeline, trigger_dataset_download,
                            confirm_redownload, MAX_HIST_TEXTURES,
                            save_discovery_process_name, open_png_export_dialog)
-from ui.zoom import ZOOM_STEPS, font_px
-from ui.zoom_ui import (setup_zoom, start_zoom, zoom_in, zoom_out, zoom_preset,
-                        zoom_menu_tag, center_window)
+from ui.zoom import auto_zoom, font_px
+from ui.zoom_ui import start_zoom, center_window
 from ui.screen import screen_size, fit_window
 from ui.state import update_run_state as _set_state
 from ui.tutorial import show_tutorial
@@ -91,6 +90,13 @@ with dpg.texture_registry():
             except Exception:
                 pass
 
+# ── Interface zoom for this screen ────────────────────────────────────────────
+# The layout is designed for a 1440x900 screen; on larger screens (e.g. HiDPI
+# Linux displays drawn in raw pixels) everything is scaled up to the largest
+# preset that still fits.
+_screen = screen_size()
+_zoom = auto_zoom(_screen)
+
 # ── Font registry ─────────────────────────────────────────────────────────────
 _large_font = None
 _extended_font = None
@@ -116,22 +122,20 @@ with dpg.font_registry():
             except Exception:
                 pass
 
-    # Fonts for the zoom steps other than 100% (fonts must exist before the
+    # Fonts for the zoom chosen for this screen (fonts must exist before the
     # viewport is set up). ProggyClean is the built-in UI font: re-rendering it
-    # at each size keeps text sharp, where scaling the 13 px font would blur it.
+    # at the zoomed size keeps text sharp, where scaling the 13 px font would blur it.
     _zoom_fonts = {1.0: {"base": 0, "large": _large_font, "ext": _extended_font}}
-    _proggy_path = os.path.join(_HERE, "fonts", "ProggyClean.ttf")
-    for _z in ZOOM_STEPS:
-        if _z == 1.0:
-            continue
+    if _zoom != 1.0:
         try:
-            _zoom_fonts[_z] = {
-                "base": dpg.add_font(_proggy_path, font_px(13, _z), pixel_snapH=True),
-                "large": dpg.add_font(_ui_font_path, font_px(20, _z)) if _ui_font_path else None,
-                "ext": dpg.add_font(_ui_font_path, font_px(13, _z)) if _ui_font_path else None,
+            _zoom_fonts[_zoom] = {
+                "base": dpg.add_font(os.path.join(_HERE, "fonts", "ProggyClean.ttf"),
+                                     font_px(13, _zoom), pixel_snapH=True),
+                "large": dpg.add_font(_ui_font_path, font_px(20, _zoom)) if _ui_font_path else None,
+                "ext": dpg.add_font(_ui_font_path, font_px(13, _zoom)) if _ui_font_path else None,
             }
         except Exception:
-            pass
+            _zoom = 1.0  # without a sharp font keep the 100% layout
 
 _ui_state.EXTENDED_FONT = _extended_font
 _ui_state.LARGE_FONT = _large_font
@@ -540,16 +544,6 @@ with dpg.window(tag="primary_studio_window", label="Future Collider Experiment")
                 callback=lambda: create_node("Histogram"),
             )
 
-        with dpg.menu(label="View"):
-            for _z in ZOOM_STEPS:
-                dpg.add_menu_item(label=f"Zoom {round(_z * 100)}%", tag=zoom_menu_tag(_z),
-                                  check=True, default_value=(_z == 1.0),
-                                  shortcut="Ctrl/Cmd 0" if _z == 1.0 else "",
-                                  callback=zoom_preset, user_data=_z)
-            dpg.add_separator()
-            dpg.add_menu_item(label="Zoom In", shortcut="Ctrl/Cmd +", callback=zoom_in)
-            dpg.add_menu_item(label="Zoom Out", shortcut="Ctrl/Cmd -", callback=zoom_out)
-
         with dpg.menu(label="About"):
             dpg.add_menu_item(
                 label="About FCE Studio...",
@@ -859,16 +853,18 @@ for _out_nid, _in_nid in [(0, 1), (1, 2), (2, 3), (3, 4)]:
         pass
 
 setup_link_handlers()
-setup_zoom(_zoom_fonts)
 
 # ── Viewport ──────────────────────────────────────────────────────────────────
-# maximize_viewport() has no effect on macOS, where a 920 px tall window can be
-# taller than the screen (hiding the node palette), so fit it to the screen.
-_vp_w, _vp_h = fit_window(1440, 920, screen_size())
+# Open at the zoomed size, fitted to the screen: maximize_viewport() has no
+# effect on macOS when the window is taller than the screen (the node palette
+# would be hidden below it).
+_vp_w, _vp_h = fit_window(int(1440 * _zoom), int(920 * _zoom), _screen)
 dpg.create_viewport(
     title="Future Collider Experiment",
     width=_vp_w,
     height=_vp_h,
+    x_pos=0,  # top-left, so the window is on screen even where maximizing fails
+    y_pos=0,
     resizable=True,
     small_icon=os.path.join(_HERE, "fce.ico") if os.path.exists(os.path.join(_HERE, "fce.ico")) else "",
     large_icon=os.path.join(_HERE, "fce.ico") if os.path.exists(os.path.join(_HERE, "fce.ico")) else "",
@@ -880,7 +876,7 @@ dpg.maximize_viewport()
 
 
 def _on_first_frame():
-    start_zoom()  # restore the saved zoom before the tutorial window opens
+    start_zoom(_zoom, _zoom_fonts)  # before the tutorial window opens
     show_tutorial()
 
 

@@ -1,26 +1,15 @@
-"""Whole-interface zoom: Ctrl/Cmd + mouse wheel, Ctrl/Cmd + = / - / 0, View menu.
+"""Interface zoom, chosen automatically from the screen size at startup.
 
-At 100% the interface is left exactly as built. At other zoom steps the UI font
-is swapped for a copy rendered at that size, explicit widget sizes are scaled
-from their 100% values, spacing is scaled through a global theme and nodes are
-spread out on the canvas. Widgets created later (new nodes, plots, popups) are
-picked up by a periodic pass.
+At 100% the interface is left exactly as built. At the other presets the UI
+font is swapped for a copy rendered at that size, explicit widget sizes are
+scaled from their 100% values, spacing is scaled through a global theme and
+nodes are spread out on the canvas. Widgets created later (new nodes, plots,
+popups) are picked up by a periodic pass.
 """
-import os
-import time
-
 import dearpygui.dearpygui as dpg
 
 import ui.state as _state
-from ui.zoom import (ZOOM_STEPS, step_zoom, scale_size, panel_width, fit_width,
-                     load_zoom, save_zoom)
-from paths import get_fce_home
-
-_SETTINGS_FILE = os.path.join(get_fce_home(), "ui_settings.json")
-
-# ImGui key codes; DearPyGui has no constants for the Super (Cmd) keys or "=".
-_KEY_LSUPER, _KEY_RSUPER, _KEY_EQUAL = 530, 534, 602
-_MODIFIER_KEYS = (dpg.mvKey_LControl, dpg.mvKey_RControl, _KEY_LSUPER, _KEY_RSUPER)
+from ui.zoom import scale_size, panel_width, fit_width
 
 # Explicit sizes that follow the zoom, per item type.
 _SIZE_KEYS = {
@@ -75,25 +64,13 @@ _NODE_STYLE_VARS = (
 )
 _THEME_TAG = "zoom_spacing_theme"
 
-_TICK_FRAMES = 15             # frames between passes over newly created widgets
-_WHEEL_STEP_INTERVAL = 0.08   # seconds between zoom steps while the wheel keeps turning
+_TICK_FRAMES = 15  # frames between passes over newly created widgets
 
 _ZOOM = [1.0]
 _FONTS: dict = {}      # zoom -> {"base": font (0 = built-in), "large": font, "ext": font}
 _FONT_ROLE: dict = {}  # font id -> "large" / "ext"
 _BASE: dict = {}       # item id -> {config key: size at 100%}; {} = nothing to scale
 _WINDOWS: set = set()  # popup windows, kept inside the viewport while zoomed
-_WHEEL = [0.0, 0.0]    # accumulated wheel delta, time of the last wheel zoom step
-
-
-def zoom_modifier_down() -> bool:
-    """True while Ctrl or Cmd is held."""
-    return any(dpg.is_key_down(k) for k in _MODIFIER_KEYS)
-
-
-def scaled(value):
-    """A size given at 100% at the current zoom."""
-    return scale_size(value, _ZOOM[0])
 
 
 def _fit_layout(alias: str, sizes: dict, zoom: float) -> dict:
@@ -192,7 +169,7 @@ def _bind_spacing_theme(zoom: float) -> None:
     dpg.bind_theme(_THEME_TAG)
 
 
-def set_zoom(zoom: float, save: bool = True) -> None:
+def set_zoom(zoom: float) -> None:
     """Zoom the whole interface to one of the ZOOM_STEPS."""
     old = _ZOOM[0]
     if zoom == old:
@@ -218,40 +195,6 @@ def set_zoom(zoom: float, save: bool = True) -> None:
             dpg.configure_item(tag, horizontal=zoom <= 1.0)
     _scale_node_positions(zoom / old)
     _bind_spacing_theme(zoom)
-    _sync_zoom_menu()
-    if save:
-        save_zoom(_SETTINGS_FILE, zoom)
-    from ui.components import log_to_message_center
-    log_to_message_center(f"Zoom: {round(zoom * 100)}%")
-
-
-def zoom_menu_tag(zoom: float) -> str:
-    """Tag of the View-menu item for a zoom preset."""
-    return f"zoom_menu_{round(zoom * 100)}"
-
-
-def _sync_zoom_menu() -> None:
-    for step in ZOOM_STEPS:
-        if dpg.does_item_exist(zoom_menu_tag(step)):
-            dpg.set_value(zoom_menu_tag(step), step == _ZOOM[0])
-
-
-def zoom_preset(sender=None, app_data=None, user_data=None):
-    """View-menu callback; user_data is the preset."""
-    set_zoom(user_data)
-    _sync_zoom_menu()  # clicking the current preset must not untick it
-
-
-def zoom_in(sender=None, app_data=None, user_data=None):
-    set_zoom(step_zoom(_ZOOM[0], +1))
-
-
-def zoom_out(sender=None, app_data=None, user_data=None):
-    set_zoom(step_zoom(_ZOOM[0], -1))
-
-
-def zoom_reset(sender=None, app_data=None, user_data=None):
-    set_zoom(1.0)
 
 
 def center_window(tag) -> None:
@@ -263,31 +206,13 @@ def center_window(tag) -> None:
                            max(0, (dpg.get_viewport_height() - h) // 2)])
 
 
-def _on_mouse_wheel(sender, app_data):
-    if not zoom_modifier_down():
-        return
-    # Trackpads send many small deltas: step once per notch, not per event.
-    _WHEEL[0] += float(app_data)
-    now = time.monotonic()
-    if abs(_WHEEL[0]) < 1.0 or now - _WHEEL[1] < _WHEEL_STEP_INTERVAL:
-        return
-    direction = 1 if _WHEEL[0] > 0 else -1
-    _WHEEL[0], _WHEEL[1] = 0.0, now
-    set_zoom(step_zoom(_ZOOM[0], direction))
-
-
-def _on_zoom_key(sender, app_data, user_data):
-    if zoom_modifier_down():
-        user_data()
-
-
 def _tick(sender=None, app_data=None, user_data=None):
     rescale_new_items()
     dpg.set_frame_callback(dpg.get_frame_count() + _TICK_FRAMES, _tick)
 
 
-def setup_zoom(fonts: dict) -> None:
-    """Register the per-step fonts and the mouse/keyboard zoom handlers.
+def start_zoom(zoom: float, fonts: dict) -> None:
+    """Apply the zoom chosen for this screen (call on the first frame).
 
     fonts: {zoom: {"base": font (0 = built-in), "large": font, "ext": font}}.
     """
@@ -296,19 +221,7 @@ def setup_zoom(fonts: dict) -> None:
         for role in ("large", "ext"):
             if per_step.get(role):
                 _FONT_ROLE[per_step[role]] = role
-    with dpg.handler_registry():
-        dpg.add_mouse_wheel_handler(callback=_on_mouse_wheel)
-        for keys, action in (((_KEY_EQUAL, dpg.mvKey_Add), zoom_in),
-                             ((dpg.mvKey_Minus, dpg.mvKey_Subtract), zoom_out),
-                             ((dpg.mvKey_0, dpg.mvKey_NumPad0), zoom_reset)):
-            for key in keys:
-                dpg.add_key_press_handler(key=key, callback=_on_zoom_key, user_data=action)
-
-
-def start_zoom() -> None:
-    """Restore the saved zoom and start picking up new widgets (call on the first frame)."""
     dpg.set_viewport_resize_callback(_on_viewport_resize)
-    zoom = load_zoom(_SETTINGS_FILE)
     if zoom != 1.0:
-        set_zoom(zoom, save=False)
-    _tick()
+        set_zoom(zoom)
+        _tick()

@@ -1,24 +1,18 @@
-"""Interface zoom: zoom steps, size scaling and the saved zoom level (no GUI imports)."""
-import json
+"""Interface zoom: presets, the automatic choice for a screen, and size scaling (no GUI imports)."""
 
-# Fixed zoom presets; the layout is checked at each of them.
+# Zoom presets; the layout is checked at each of them.
 ZOOM_STEPS = (1.0, 1.25, 1.5, 2.0)
 
-
-def step_zoom(zoom: float, direction: int) -> float:
-    """The zoom step above (direction > 0) or below (direction < 0) zoom, clamped to ZOOM_STEPS."""
-    if direction > 0:
-        return next((s for s in ZOOM_STEPS if s > zoom + 1e-6), ZOOM_STEPS[-1])
-    return next((s for s in reversed(ZOOM_STEPS) if s < zoom - 1e-6), ZOOM_STEPS[0])
+# Screen area the 100% layout is designed for.
+DESIGN_SIZE = (1440, 900)
 
 
-def nearest_step(zoom) -> float:
-    """The zoom step closest to zoom; 1.0 for anything that is not a number."""
-    try:
-        z = float(zoom)
-    except (TypeError, ValueError):
+def auto_zoom(screen, design=DESIGN_SIZE) -> float:
+    """The largest preset at which the layout still fits the screen; 1.0 if the screen is unknown."""
+    if not screen:
         return 1.0
-    return min(ZOOM_STEPS, key=lambda s: abs(s - z))
+    fits = [z for z in ZOOM_STEPS if design[0] * z <= screen[0] and design[1] * z <= screen[1]]
+    return max(fits, default=1.0)
 
 
 def scale_size(value, zoom: float):
@@ -49,30 +43,3 @@ def fit_width(width: int, height: int, max_width: int):
 def font_px(size: int, zoom: float) -> int:
     """Pixel size of a font of the given 100% size at this zoom."""
     return max(6, int(round(size * zoom)))
-
-
-def load_zoom(path: str) -> float:
-    """The zoom saved in the settings file at path, or 1.0."""
-    try:
-        with open(path) as f:
-            return nearest_step(json.load(f).get("zoom", 1.0))
-    except (OSError, ValueError, AttributeError):
-        return 1.0
-
-
-def save_zoom(path: str, zoom: float) -> None:
-    """Store zoom in the settings file at path, keeping any other settings in it."""
-    data = {}
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        pass
-    if not isinstance(data, dict):
-        data = {}
-    data["zoom"] = zoom
-    try:
-        with open(path, "w") as f:
-            json.dump(data, f)
-    except OSError:
-        pass
