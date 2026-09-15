@@ -6,7 +6,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.path_filter import (
-    _delta_r, _P4Proxy, _ArrayProxy, _delta_r_vec,
+    _delta_r, _P4Proxy, _ArrayProxy, _delta_r_vec, _make_met, _missing_energy,
     make_cache_acc, save_cache, _CACHE_KEYS,
     _single_photon_met, filter_raw_event_data,
 )
@@ -175,14 +175,16 @@ _RECOIL_MET_E = 365.0 - 12.0 * math.cosh(0.5)
 
 
 def test_single_photon_met_replaces_single_particle_recoil():
-    pt, phi = _single_photon_met(12.0, 0.3, 0.5, _RECOIL_MET_E, 30.0, 2.9)
+    pt, phi, eta = _single_photon_met(12.0, 0.3, 0.5, _RECOIL_MET_E, 30.0, 2.9, 1.4)
     assert pt == 30.0
     assert abs(phi - (2.9 - math.pi)) < 1e-12
+    assert eta == -1.4          # the recoil points opposite the photon
 
 
 def test_single_photon_met_keeps_multi_particle_recoil():
     # Visible energy (80 GeV) well above |p_miss|: not a single-particle recoil
-    assert _single_photon_met(12.0, 0.3, 0.5, 365.0 - 80.0, 30.0, 2.9) == (12.0, 0.3)
+    assert _single_photon_met(12.0, 0.3, 0.5, 365.0 - 80.0,
+                              30.0, 2.9, 1.4) == (12.0, 0.3, 0.5)
 
 
 def _jagged(*rows):
@@ -211,3 +213,58 @@ def test_filter_balances_met_only_in_photon_only_events():
     assert abs(float(acc["met_phi"][0]) - (2.9 - math.pi)) < 1e-4
     assert abs(float(acc["met_pt"][1]) - 12.0) < 1e-4
     assert abs(float(acc["met_phi"][1]) - 0.3) < 1e-4
+
+
+# ---------------------------------------------------------------------------
+# Missing momentum as a full 4-vector
+# ---------------------------------------------------------------------------
+
+def test_missing_energy_removes_the_365_offset():
+    # MET_e is stored as 365 - Evis whatever the collision energy, so at 91 GeV
+    # an event with 91 GeV of visible energy has no missing energy left.
+    assert abs(_missing_energy(365.0 - 91.0, 91.0)) < 1e-9
+    assert abs(_missing_energy(365.0 - 60.0, 160.0) - 100.0) < 1e-9
+    # At 365 GeV the stored value already is the missing energy.
+    assert abs(_missing_energy(42.0, 365.0) - 42.0) < 1e-9
+
+
+def test_make_met_without_energy_has_no_p4():
+    met = _make_met(25.0, 1.2)
+    assert met.pt == 25.0
+    assert met.phi == 1.2
+    assert met.p4 == -999.0      # the _P sentinel, i.e. no 4-vector offered
+
+
+def test_make_met_with_energy_builds_a_4vector():
+    met = _make_met(25.0, 1.2, 0.8, 40.0)
+    assert abs(met.p4.pt - 25.0) < 1e-9
+    assert abs(met.p4.eta - 0.8) < 1e-9
+    assert abs(met.p4.e - 40.0) < 1e-9
+
+
+def test_lepton_plus_met_invariant_mass():
+    """The observable the missing 4-vector exists for."""
+    import vector
+    lep = vector.obj(pt=30.0, eta=0.5, phi=0.3, e=40.0)
+    met = _make_met(30.0, 0.3 + math.pi, -0.5, 40.0)   # exactly back-to-back
+    total = lep + met.p4
+    assert abs(total.pt) < 1e-9                        # momenta cancel
+    assert abs(total.mass - 80.0) < 1e-9               # so m = sum of energies
+
+
+def test_array_proxy_p4_refuses_a_sentinel_energy():
+    """A cache with no missing energy must not yield a plausible-looking mass."""
+    data = {
+        "weight": np.array([1.0, 1.0]),
+        "met_pt": np.array([25.0, 25.0]),
+        "met_eta": np.array([0.8, 0.8]),
+        "met_phi": np.array([1.2, 1.2]),
+        "met_e": np.array([40.0, -999.0]),
+    }
+    try:
+        _ArrayProxy("met", data).p4
+    except ValueError:
+        return
+    # An AttributeError here would be swallowed by __getattr__ and handed back
+    # as a -999 array, which is exactly the failure this guards against.
+    raise AssertionError("expected ValueError for the sentinel energy")

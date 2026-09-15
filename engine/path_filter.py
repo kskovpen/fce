@@ -138,6 +138,14 @@ class _ArrayProxy:
             eta = d[f"{pfx}_eta"].astype(np.float64)
             phi = d[f"{pfx}_phi"].astype(np.float64)
             e   = d[f"{pfx}_e"].astype(np.float64)
+            # A sentinel energy beside a valid eta would yield a finite,
+            # plausible-looking mass that the downstream > -900 and isfinite
+            # filters cannot catch, so hand such a cache to the per-event path.
+            # Not an AttributeError: raised inside a property, that would fall
+            # through to __getattr__ below and quietly return the sentinel array.
+            if np.any((e <= -900.0) & (np.abs(eta) < 900.0)):
+                raise ValueError(
+                    f"{pfx}.p4 is unavailable for some events in this cache")
             self.__dict__["_p4"] = _P4Proxy(
                 e, pt * np.cos(phi), pt * np.sin(phi), pt * np.sinh(eta)
             )
@@ -181,17 +189,46 @@ def _make_photon(ph: dict) -> _P:
     return _P(pt=ph["pt"], eta=ph["eta"], phi=ph["phi"], e=ph["e"], p4=p4)
 
 
-def _make_met(pt, phi) -> _P:
-    """Build a MET proxy with only physically defined attributes (pt, phi)."""
-    return _P(pt=pt, phi=phi)
+def _make_met(pt, phi, eta=None, e=None) -> _P:
+    """Build the missing-momentum proxy.
+
+    At a lepton collider the initial state is known, so the missing momentum is
+    the full recoil of the visible system rather than a transverse quantity
+    only: the stored (pt, eta, phi) reproduce -p_visible in all three
+    components. Given the missing energy as well, `met` carries a genuine
+    4-vector and (l1.p4 + met.p4).mass is the mass of the system recoiling
+    against the lepton.
+
+    eta/e are omitted when the collision energy is unknown or the ntuple lacks
+    MET_eta/MET_e; met then keeps pt and phi only, as before, and met.p4 is
+    absent rather than wrong.
+    """
+    if eta is None or e is None:
+        return _P(pt=pt, phi=phi)
+    return _P(pt=pt, phi=phi, eta=eta, e=e,
+              p4=vector.obj(pt=pt, eta=eta, phi=phi, e=e))
 
 
-# The ntuples store MET_e = 365 GeV - (visible energy) at every collision energy.
+# The ntuples store MET_e = 365 GeV - (visible energy) at every collision energy,
+# so the missing energy at any other collision energy needs the offset removed.
 _MET_E_OFFSET = 365.0
 
 
-def _single_photon_met(met_pt, met_phi, met_eta, met_e, ph_pt, ph_phi):
-    """Return the (pt, phi) MET for an event whose only object is one photon.
+def _missing_energy(met_e, ecm):
+    """Missing energy sqrt(s) - E_visible, from the stored MET_e."""
+    return met_e - (_MET_E_OFFSET - ecm)
+
+
+def _ecm_from_cfg(cfg) -> float | None:
+    """Collision energy in GeV from cfg['energy'] (e.g. '160 GeV'), else None."""
+    try:
+        return float(str(cfg.get("energy", "")).replace("GeV", "").strip())
+    except (AttributeError, ValueError):
+        return None
+
+
+def _single_photon_met(met_pt, met_phi, met_eta, met_e, ph_pt, ph_phi, ph_eta):
+    """Return the (pt, phi, eta) MET for an event whose only object is one photon.
 
     In some samples (X4 at 91 GeV above all, and the pseudo-data made the same
     way) the stored MET of such events is the recoil of a single soft massless
@@ -202,8 +239,8 @@ def _single_photon_met(met_pt, met_phi, met_eta, met_e, ph_pt, ph_phi):
     """
     p_miss = met_pt * math.cosh(met_eta)
     if abs((_MET_E_OFFSET - met_e) - p_miss) > 0.01 * p_miss:
-        return met_pt, met_phi
-    return ph_pt, math.remainder(ph_phi + math.pi, 2 * math.pi)
+        return met_pt, met_phi, met_eta
+    return ph_pt, math.remainder(ph_phi + math.pi, 2 * math.pi), -ph_eta
 
 
 # ---------------------------------------------------------------------------
@@ -218,12 +255,12 @@ _CACHE_KEYS = [
     "j2_pt", "j2_eta", "j2_phi", "j2_e", "j2_btag",
     "ph1_pt", "ph1_eta", "ph1_phi", "ph1_e",
     "ph2_pt", "ph2_eta", "ph2_phi", "ph2_e",
-    "met_pt", "met_phi",
+    "met_pt", "met_phi", "met_eta", "met_e",
 ]
 
 # Part of every selection-cache key: bump when the event content written to the
 # caches changes, so caches built by an older version are not reused.
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 _INIT_CAP = 4096
 
@@ -272,6 +309,7 @@ def _append_event(acc, nlep, nel, nmu, njets, nphot, nbjets,
     acc["ph2_pt"][i] = ph2.pt;  acc["ph2_eta"][i] = ph2.eta
     acc["ph2_phi"][i] = ph2.phi; acc["ph2_e"][i] = ph2.e
     acc["met_pt"][i] = met.pt;  acc["met_phi"][i] = met.phi
+    acc["met_eta"][i] = met.eta; acc["met_e"][i] = met.e
     acc["_n"] = i + 1
 
 
@@ -343,8 +381,7 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
                    if "ph1_pt" in data else _NULL)
             ph2 = (_obj_from_cache(data, i, "ph2", ["eta", "phi", "e"])
                    if "ph2_pt" in data else _NULL)
-            met = _make_met(float(data["met_pt"][i]),
-                            float(data["met_phi"][i]) if "met_phi" in data else 0.0)
+            met = _met_from_cache(data, i)
             local_vars = {
                 "nlep": int(data["nlep"][i]), "nel": int(data["nel"][i]),
                 "nmu":  int(data["nmu"][i]),  "njets": int(data["njets"][i]),
@@ -379,6 +416,21 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
             continue
 
     save_cache(output_cache_path, acc)
+
+
+def _met_from_cache(data, i) -> _P:
+    """Rebuild the missing-momentum proxy from a loaded .npz cache.
+
+    Caches written before met_eta/met_e were stored (CACHE_VERSION < 3) yield a
+    transverse-only met, so an expression using met.p4 against such a cache
+    fails loudly instead of being filled with a sentinel.
+    """
+    eta = float(data["met_eta"][i]) if "met_eta" in data else -999.0
+    e = float(data["met_e"][i]) if "met_e" in data else -999.0
+    return _make_met(float(data["met_pt"][i]),
+                     float(data["met_phi"][i]) if "met_phi" in data else 0.0,
+                     eta if eta > -900 else None,
+                     e if e > -900 else None)
 
 
 def _obj_from_cache(data, i, prefix, keys, extra=None) -> _P:
@@ -477,8 +529,7 @@ def fill_histogram_from_cache(cache_file: str, outHist, observable_target: str,
             j2 = _obj_from_cache(data, i, "j2", ["eta", "phi", "e", "btag"])
             ph1 = _obj_from_cache(data, i, "ph1", ["eta", "phi", "e"]) if "ph1_pt" in data else _P()
             ph2 = _obj_from_cache(data, i, "ph2", ["eta", "phi", "e"]) if "ph2_pt" in data else _P()
-            met = _make_met(float(data["met_pt"][i]),
-                            float(data["met_phi"][i]) if "met_phi" in data else 0.0)
+            met = _met_from_cache(data, i)
             local_vars = {
                 "nlep": int(data["nlep"][i]), "nel": int(data["nel"][i]),
                 "nmu":  int(data["nmu"][i]),  "njets": int(data["njets"][i]),
@@ -556,6 +607,7 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
     ph_phi = arrays["photon_phi"] if has_ph else None
     ph_e   = arrays["photon_e"]   if has_ph else None
 
+    ecm = _ecm_from_cfg(cfg)
     mult_cuts = cfg.get("mult_cuts", [])
     # OPT-2: use pre-compiled expression objects when passed via cfg
     compiled_sel_exprs = cfg.get("compiled_sel_exprs", None)
@@ -575,6 +627,9 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
             w       = float(w_arr[i])
             met_pt  = float(met_pt_arr[i])
             met_phi = float(met_phi_arr[i]) if met_phi_arr is not None else 0.0
+            met_eta = float(met_eta_arr[i]) if met_eta_arr is not None else None
+            met_e   = (_missing_energy(float(met_e_arr[i]), ecm)
+                       if met_e_arr is not None and ecm is not None else None)
 
             nel   = len(el_pt[i]) if has_el else 0
             nmu   = len(mu_pt[i]) if has_mu else 0
@@ -665,10 +720,16 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
             ph2 = _make_photon(photons[1])  if len(photons) >= 2 else _NULL
             if (nphot == 1 and nlep == 0 and njets == 0
                     and met_eta_arr is not None and met_e_arr is not None):
-                met_pt, met_phi = _single_photon_met(
+                was = (met_pt, met_phi)
+                met_pt, met_phi, met_eta = _single_photon_met(
                     met_pt, met_phi, float(met_eta_arr[i]), float(met_e_arr[i]),
-                    photons[0]["pt"], photons[0]["phi"])
-            met = _make_met(met_pt, met_phi)
+                    photons[0]["pt"], photons[0]["phi"], photons[0]["eta"])
+                if (met_pt, met_phi) != was and ecm is not None:
+                    # The photon is then the whole visible system, and the stored
+                    # MET_e describes the soft particle the MET was built from,
+                    # not the photon — so take the missing energy from the photon.
+                    met_e = ecm - photons[0]["e"]
+            met = _make_met(met_pt, met_phi, met_eta, met_e)
 
             local_vars = {
                 "nlep": nlep, "nel": nel, "nmu": nmu, "njets": njets, "nphot": nphot,
