@@ -100,6 +100,10 @@ def execute_analysis(cfg, _unused):
                         "sig":            sig,
                         # For New Physics, mu is the number of excess events.
                         "excess":         hcfg.get("target") == NEW_PHYSICS,
+                        # The process the fit is about: discovered-process
+                        # names are keyed by it, not by the histogram slot.
+                        "target":         hcfg.get("target"),
+                        "energy":         en,
                         "node_name":      hcfg.get("node_name", ""),
                         "x_label":        hcfg.get("x_label", ""),
                         "sel_custom_name": hcfg.get("sel_custom_name", ""),

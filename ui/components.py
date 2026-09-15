@@ -20,14 +20,16 @@ CURRENT_WORKER = None
 
 MAX_HIST_TEXTURES = 8
 
-# User-provided names for discovered processes: {plot_idx: str}
-_NAMED_PROCESSES: dict[int, str] = {}
-# Processes already discovered (no popup again this session): {plot_idx}
-_DISCOVERED_PIDS: set[int] = set()
+# Names students gave discovered processes: {(energy, sample): name}. Keyed by
+# process, never by histogram slot: keyed by slot, a name followed whatever that
+# histogram fitted next, so naming X2 and then fitting X1 there renamed X1.
+_NAMED_PROCESSES: dict[tuple[str, str], str] = {}
+# Processes already discovered (no popup again this session): {(energy, sample)}
+_DISCOVERED: set[tuple[str, str]] = set()
 # Queue of (pidx, res) waiting to show discovery popups sequentially
 _DISCOVERY_QUEUE: list = []
-# Which plot_idx the currently open discovery popup refers to
-_CURRENT_DISCOVERY_PIDX: list[int | None] = [None]
+# Which process the currently open discovery popup refers to
+_CURRENT_DISCOVERY: list[tuple[str, str] | None] = [None]
 # Last cfg and display params from a successful run (for post-discovery re-render)
 _LAST_CFG: dict | None = None
 _LAST_DISPLAY_PARAMS: dict | None = None
@@ -75,13 +77,57 @@ def _discovery_hint(x_label: str) -> str:
             "Standard Model prediction. mu > 1 suggests more signal than expected.")
 
 
+def _process_key(energy, target) -> tuple[str, str]:
+    """(energy without unit, sample): X1 at 91 GeV is not X1 at 240 GeV."""
+    return str(energy or "").replace("GeV", "").strip(), str(target or "")
+
+
+def _hist_configs(cfg: dict) -> list:
+    hcfgs = list(cfg.get("histograms", []))
+    for sel in cfg.get("selections", []):
+        hcfgs.extend(sel.get("histograms", []))
+    return hcfgs
+
+
+def _apply_process_names(cfg: dict) -> None:
+    """Put the discovered-process names into every histogram config of cfg.
+
+    Every legend gets all processes named at this energy, whichever histogram
+    they were discovered on, and a histogram fitting a named process shows it.
+    """
+    en = _process_key(cfg.get("energy"), "")[0]
+    proc_map = {t: n for (e, t), n in _NAMED_PROCESSES.items() if e == en}
+    for hcfg in _hist_configs(cfg):
+        name = proc_map.get(hcfg.get("target", ""))
+        if name:
+            hcfg["process_name"] = name
+        else:
+            hcfg.pop("process_name", None)
+        if proc_map:
+            hcfg["process_names_map"] = proc_map
+        else:
+            hcfg.pop("process_names_map", None)
+
+
+def _new_discoveries(fit_results: dict) -> list:
+    """(plot_idx, res) for each process newly past 5 sigma, once per process."""
+    out, seen = [], set()
+    for pidx, res in sorted(fit_results.items()):
+        key = _process_key(res.get("energy"), res.get("target"))
+        if (res.get("sig") is not None and res["sig"] >= 5.0
+                and key not in _DISCOVERED and key not in seen):
+            seen.add(key)
+            out.append((pidx, res))
+    return out
+
+
 def _show_next_discovery() -> None:
     if not _DISCOVERY_QUEUE or not dpg.does_item_exist("discovery_window"):
         if dpg.does_item_exist("discovery_window"):
             dpg.configure_item("discovery_window", show=False)
         return
     pidx, res = _DISCOVERY_QUEUE.pop(0)
-    _CURRENT_DISCOVERY_PIDX[0] = pidx
+    _CURRENT_DISCOVERY[0] = _process_key(res.get("energy"), res.get("target"))
 
     x_label  = _simplify_obs_label(res.get("x_label", "")) or f"Histogram {pidx + 1}"
     sel_label = _discovery_selection_label(res)
@@ -106,7 +152,7 @@ def _show_next_discovery() -> None:
         dpg.set_value("discovery_hint_text", _discovery_hint(x_label))
     if dpg.does_item_exist("discovery_process_name_input"):
         dpg.set_value("discovery_process_name_input",
-                      _NAMED_PROCESSES.get(pidx, ""))
+                      _NAMED_PROCESSES.get(_CURRENT_DISCOVERY[0], ""))
     center_window("discovery_window")
     dpg.configure_item("discovery_window", show=True)
     dpg.focus_item("discovery_window")
@@ -123,25 +169,7 @@ def _rerender_after_discovery() -> None:
         return
 
     cfg_copy = _copy.deepcopy(cfg)
-    _all_hcfgs = list(cfg_copy.get("histograms", []))
-    for _sel in cfg_copy.get("selections", []):
-        _all_hcfgs.extend(_sel.get("histograms", []))
-
-    _proc_map: dict[str, str] = {}
-    for _hcfg in _all_hcfgs:
-        _pidx = _hcfg.get("plot_idx", 0)
-        _tgt  = _hcfg.get("target", "")
-        if _tgt and _pidx in _NAMED_PROCESSES:
-            _proc_map[_tgt] = _NAMED_PROCESSES[_pidx]
-        if _pidx in _NAMED_PROCESSES:
-            _hcfg["process_name"] = _NAMED_PROCESSES[_pidx]
-        else:
-            _hcfg.pop("process_name", None)
-    for _hcfg in _all_hcfgs:
-        if _proc_map:
-            _hcfg["process_names_map"] = _proc_map
-        else:
-            _hcfg.pop("process_names_map", None)
+    _apply_process_names(cfg_copy)
 
     try:
         _config_path = os.path.join(
@@ -168,12 +196,12 @@ def _rerender_after_discovery() -> None:
 
 
 def save_discovery_process_name(name: str) -> None:
-    pidx = _CURRENT_DISCOVERY_PIDX[0]
-    if pidx is not None:
+    key = _CURRENT_DISCOVERY[0]
+    if key is not None:
         if name.strip():
-            _NAMED_PROCESSES[pidx] = name.strip()
-        _DISCOVERED_PIDS.add(pidx)
-        _CURRENT_DISCOVERY_PIDX[0] = None
+            _NAMED_PROCESSES[key] = name.strip()
+        _DISCOVERED.add(key)
+        _CURRENT_DISCOVERY[0] = None
     _show_next_discovery()
     if not _DISCOVERY_QUEUE and _LAST_CFG is not None:
         threading.Thread(target=_rerender_after_discovery, daemon=True).start()
@@ -277,7 +305,8 @@ def _add_fit_label(plot_idx: int, fit_results: dict, parent: str,
     res = fit_results.get(plot_idx)
     if res is None:
         return
-    name = _NAMED_PROCESSES.get(plot_idx) or res.get("node_name", "").strip()
+    name = (_NAMED_PROCESSES.get(_process_key(res.get("energy"), res.get("target")))
+            or res.get("node_name", "").strip())
     if multi_hist and name:
         dpg.add_text(f"Statistical Fit: {name}", parent=parent)
     elif multi_hist:
@@ -403,12 +432,8 @@ def _frame_poll_callback(sender=None, app_data=None, user_data=None):
                     dpg.configure_item("cutflow_save_btn", show=True)
                 safe_set_state("cutflow_ready", False)
 
-            # Discovery popup for new 5-sigma results (skip already-discovered)
-            to_discover = [
-                (pidx, res) for pidx, res in fit_results.items()
-                if res.get("sig") is not None and res["sig"] >= 5.0
-                and pidx not in _DISCOVERED_PIDS
-            ]
+            # Discovery popup for processes newly past 5 sigma
+            to_discover = _new_discoveries(fit_results)
             if to_discover:
                 _DISCOVERY_QUEUE.clear()
                 _DISCOVERY_QUEUE.extend(to_discover)
@@ -539,22 +564,8 @@ def trigger_analysis_pipeline():
 
     cfg = compile_graph_topology()
 
-    # Build a sample-key → process-name map from ALL named histograms so every
-    # plot's legend can reflect all discovered processes, not just its own.
-    _all_hcfgs = list(cfg.get("histograms", []))
-    for _sel in cfg.get("selections", []):
-        _all_hcfgs.extend(_sel.get("histograms", []))
-    _proc_map: dict[str, str] = {}
-    for _hcfg in _all_hcfgs:
-        _pidx = _hcfg.get("plot_idx", 0)
-        _tgt  = _hcfg.get("target", "")
-        if _tgt and _pidx in _NAMED_PROCESSES:
-            _proc_map[_tgt] = _NAMED_PROCESSES[_pidx]
-        if _pidx in _NAMED_PROCESSES:
-            _hcfg["process_name"] = _NAMED_PROCESSES[_pidx]
-    if _proc_map:
-        for _hcfg in _all_hcfgs:
-            _hcfg["process_names_map"] = _proc_map
+    # Every plot's legend reflects all processes discovered at this energy.
+    _apply_process_names(cfg)
 
     # Determine which selection caches are still valid so we can keep those
     # nodes green and only reset the ones that need reprocessing.
