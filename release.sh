@@ -55,7 +55,27 @@ if ! git diff --cached --quiet; then
     git commit -m "Release $VERSION"
 fi
 git tag "v$VERSION"
-git push && git push --tags
+
+# Each push is checked on its own. `git push && git push --tags` hides a failure:
+# set -e does not apply to any command in an && list except the last one, so a
+# rejected first push falls straight through to the success banner and reports a
+# release that never left the machine.
+if ! git push; then
+    echo ""
+    echo "Error: could not push to origin."
+    echo "The release commit and the tag v$VERSION exist locally, but nothing was"
+    echo "published and no build was triggered. Fix the push, then finish with:"
+    echo "  git push && git push --tags"
+    exit 1
+fi
+
+if ! git push --tags; then
+    echo ""
+    echo "Error: the release commit was pushed, but the tag v$VERSION was not."
+    echo "GitHub Actions builds on the tag, so nothing was published. Finish with:"
+    echo "  git push --tags"
+    exit 1
+fi
 
 echo ""
 echo "Released v$VERSION."
