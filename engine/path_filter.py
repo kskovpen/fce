@@ -46,7 +46,15 @@ def _delta_r(a, b):
 # ---------------------------------------------------------------------------
 
 class _P4Proxy:
-    """Numpy-backed 4-vector supporting vectorized arithmetic and .mass/.pt/.eta/.phi."""
+    """Numpy-backed 4-vector supporting vectorized arithmetic.
+
+    Exposes the same attribute names as the per-event `vector.obj` 4-vectors
+    built by _obj_from_cache: .e/.E/.energy, .m/.M/.mass, .pt/.rho, .eta, .phi,
+    .px/.py/.pz, .p and .deltaR(). Any name missing here makes the vectorized
+    fast path raise AttributeError; callers swallow it and re-evaluate the
+    expression event-by-event in Python — same numbers, orders of magnitude
+    slower. Keep this in sync with the vector API.
+    """
 
     def __init__(self, e, px, py, pz):
         self._e = e; self._px = px; self._py = py; self._pz = pz
@@ -55,14 +63,43 @@ class _P4Proxy:
         return _P4Proxy(self._e + other._e, self._px + other._px,
                         self._py + other._py, self._pz + other._pz)
 
+    def __sub__(self, other):
+        return _P4Proxy(self._e - other._e, self._px - other._px,
+                        self._py - other._py, self._pz - other._pz)
+
+    @property
+    def e(self):
+        return self._e
+    E = e
+    energy = e
+
+    @property
+    def px(self):
+        return self._px
+
+    @property
+    def py(self):
+        return self._py
+
+    @property
+    def pz(self):
+        return self._pz
+
+    @property
+    def p(self):
+        return np.sqrt(self._px**2 + self._py**2 + self._pz**2)
+
     @property
     def mass(self):
         m2 = self._e**2 - self._px**2 - self._py**2 - self._pz**2
         return np.sqrt(np.maximum(m2, 0.0))
+    m = mass
+    M = mass
 
     @property
     def pt(self):
         return np.sqrt(self._px**2 + self._py**2)
+    rho = pt
 
     @property
     def phi(self):

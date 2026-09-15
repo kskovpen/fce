@@ -69,6 +69,53 @@ def test_p4proxy_pt():
     assert abs(float(p4.pt[0]) - 5.0) < 1e-8
 
 
+def test_p4proxy_energy_aliases():
+    p4 = _P4Proxy(np.array([10.0]), np.array([3.0]), np.array([4.0]), np.array([0.0]))
+    for name in ("e", "E", "energy"):
+        assert float(getattr(p4, name)[0]) == 10.0
+
+
+def test_p4proxy_mass_aliases():
+    p4 = _P4Proxy(np.array([10.0]), np.array([0.0]), np.array([0.0]), np.array([0.0]))
+    for name in ("m", "M", "mass"):
+        assert abs(float(getattr(p4, name)[0]) - 10.0) < 1e-8
+
+
+def test_p4proxy_cartesian_components():
+    p4 = _P4Proxy(np.array([10.0]), np.array([3.0]), np.array([4.0]), np.array([12.0]))
+    assert float(p4.px[0]) == 3.0
+    assert float(p4.py[0]) == 4.0
+    assert float(p4.pz[0]) == 12.0
+    assert abs(float(p4.p[0]) - 13.0) < 1e-8
+    assert abs(float(p4.rho[0]) - 5.0) < 1e-8
+
+
+def test_p4proxy_sub():
+    a = _P4Proxy(np.array([9.0]), np.array([5.0]), np.array([0.0]), np.array([2.0]))
+    b = _P4Proxy(np.array([4.0]), np.array([1.0]), np.array([0.0]), np.array([2.0]))
+    d = a - b
+    assert float(d.e[0]) == 5.0
+    assert float(d.px[0]) == 4.0
+    assert float(d.pz[0]) == 0.0
+
+
+def test_p4proxy_matches_vector_obj():
+    """The vectorized proxy must expose the same names/values as vector.obj,
+    otherwise the fast path silently degrades to the per-event fallback."""
+    import vector
+    kin = [dict(pt=30.0, eta=0.5, phi=0.3, e=40.0),
+           dict(pt=20.0, eta=-0.2, phi=2.0, e=25.0)]
+    proxies = [_P4Proxy(np.array([k["e"]]),
+                        np.array([k["pt"] * math.cos(k["phi"])]),
+                        np.array([k["pt"] * math.sin(k["phi"])]),
+                        np.array([k["pt"] * math.sinh(k["eta"])]))
+               for k in kin]
+    ref = vector.obj(**kin[0]) + vector.obj(**kin[1])
+    got = proxies[0] + proxies[1]
+    for name in ("e", "E", "energy", "m", "M", "mass", "pt", "eta", "phi", "px", "py", "pz"):
+        assert abs(float(getattr(got, name)[0]) - float(getattr(ref, name))) < 1e-8, name
+
+
 def test_array_proxy_missing_key_returns_sentinel():
     data = {"weight": np.array([1.0, 2.0])}
     proxy = _ArrayProxy("l1", data)
