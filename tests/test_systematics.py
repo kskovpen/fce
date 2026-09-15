@@ -165,7 +165,7 @@ def test_fill_histogram_syst_keys_created(tmp_path):
     pytest.importorskip("boost_histogram")
 
     from engine.path_filter import (
-        make_cache_acc, save_cache, _append_event, _P,
+        make_cache_acc, save_cache, _append_event, _P, JETS,
         fill_histogram_from_cache,
     )
     from engine.analytical_loop import hist
@@ -177,7 +177,7 @@ def test_fill_histogram_syst_keys_created(tmp_path):
     # 5 events: 2 jets, 1 electron, 0 muons, 1 b-jet, weight=1.0
     for _ in range(5):
         _append_event(acc, 1, 1, 0, 2, 0, 1,
-                      null, null, null, null, null, null, met_obj, 1.0)
+                      null, null, [null] * len(JETS), null, null, met_obj, 1.0)
 
     cache_file = str(tmp_path / "syst_test.npz")
     save_cache(cache_file, acc)

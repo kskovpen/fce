@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+import pytest
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -153,13 +154,13 @@ def test_make_cache_acc_has_all_keys():
 
 
 def test_save_cache_and_reload(tmp_path):
-    from engine.path_filter import _append_event, _P
+    from engine.path_filter import _append_event, _P, JETS
     acc = make_cache_acc()
     null = _P()
     w_obj = _P(pt=0.0, eta=0.0, phi=0.0, e=0.0)
-    # Signature: (acc, nlep, nel, nmu, njets, nphot, nbjets, l1, l2, j1, j2, ph1, ph2, met, w)
+    # Signature: (acc, nlep, nel, nmu, njets, nphot, nbjets, l1, l2, jets, ph1, ph2, met, w)
     # nbjets=1 is inserted after nphot (new column added for b-tagging systematics)
-    _append_event(acc, 2, 1, 1, 0, 0, 1, null, null, null, null, null, null, w_obj, 1.5)
+    _append_event(acc, 2, 1, 1, 0, 0, 1, null, null, [null] * len(JETS), null, null, w_obj, 1.5)
 
     cache_file = str(tmp_path / "test_cache.npz")
     save_cache(cache_file, acc)
@@ -304,3 +305,60 @@ def test_missing_energy_is_never_below_the_missing_momentum():
     assert abs(mass[0]) < 1e-4
     assert abs(mass[1] - math.sqrt(50.0**2 - p**2)) < 1e-9
     assert np.isnan(mass[2])
+
+
+# ---------------------------------------------------------------------------
+# Jets beyond the second, and names no event defines
+# ---------------------------------------------------------------------------
+
+def _jet_cache(tmp_path):
+    """Two events: four jets (pT 80/60/40/25), then two jets (pT 70/50)."""
+    from engine.path_filter import _append_event, _P, _make_jet, JETS
+    acc = make_cache_acc()
+    null = _P()
+    met = _P(pt=10.0, phi=0.0, eta=0.0, e=10.0)
+    for pts in ([80.0, 60.0, 40.0, 25.0], [70.0, 50.0]):
+        jets = [_make_jet({"pt": pt, "eta": 0.1 * k, "phi": 0.5 * k, "e": pt * 1.2, "btag": 0.1})
+                for k, pt in enumerate(pts)]
+        jets += [null] * (len(JETS) - len(jets))
+        _append_event(acc, 0, 0, 0, len(pts), 0, 0, null, null, jets, null, null, met, 1.0)
+    path = str(tmp_path / "jets.npz")
+    save_cache(path, acc)
+    return path
+
+
+def test_third_and_fourth_jets_are_cached(tmp_path):
+    data = np.load(_jet_cache(tmp_path))
+    assert list(data["j3_pt"]) == [40.0, -999.0]
+    assert list(data["j4_pt"]) == [25.0, -999.0]
+    assert float(_ArrayProxy("j3", data).pt[0]) == 40.0
+
+
+def test_cut_on_the_third_jet_keeps_three_jet_events(tmp_path):
+    """j3.pt > -1 used to raise NameError on every event and drop them all."""
+    from engine.path_filter import filter_selection_cache
+    src = _jet_cache(tmp_path)
+    for expr in ("j3.pt > -1", "sqrt(j4.pt) > 0"):   # vectorized, then per-event
+        out = str(tmp_path / "out.npz")
+        filter_selection_cache(src, [expr], out)
+        assert list(np.load(out)["njets"]) == [4.0], expr
+
+
+def test_observable_on_the_fourth_jet(tmp_path):
+    pytest.importorskip("boost_histogram")
+    from engine.path_filter import fill_histogram_from_cache
+    from engine.analytical_loop import hist
+    src = _jet_cache(tmp_path)
+    for expr, expected in (("j4.pt", 25.0), ("sqrt(j4.pt) ** 2", 25.0)):   # both paths
+        h = hist()
+        h.create(bins=100, min_val=0, max_val=100)
+        fill_histogram_from_cache(src, h, expr, with_syst=False)
+        assert h.h["h"].sum() == 1.0, expr
+        assert abs(h.h["h"].axes[0].centers[np.argmax(h.h["h"].values())] - expected) < 1.0
+
+
+def test_unknown_names_are_reported():
+    from engine.path_filter import unknown_names
+    assert unknown_names("j3.pt > -1 && j4.btag > 0.7") == []
+    assert unknown_names("(l1.p4 + met.p4).mass > abs(-3) and deltaR(j1, j4) > 0.4") == []
+    assert unknown_names("j5.pt > 20 || !lep1") == ["j5", "lep1"]

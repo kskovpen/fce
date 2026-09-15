@@ -1,3 +1,4 @@
+import ast
 import math
 import re
 import numpy as np
@@ -22,6 +23,25 @@ _SAFE_BUILTINS = {
     "tan": math.tan, "pi": math.pi, "exp": math.exp, "log": math.log,
     "True": True, "False": False, "None": None,
 }
+
+# Jet slots, pt-ordered. Add a name here to expose another jet, and bump
+# CACHE_VERSION: each slot is cached as its own set of columns.
+JETS = ("j1", "j2", "j3", "j4")
+_JET_COLS = ("pt", "eta", "phi", "e", "btag")
+_JET_KEYS = tuple(tuple(f"{j}_{c}" for c in _JET_COLS) for j in JETS)
+
+# Every name an expression can use. Any other name raises NameError on every
+# event, which the loops treat as a failed cut or a missing value, so all
+# events vanish without a word.
+EXPR_NAMES = frozenset({"nlep", "nel", "nmu", "njets", "nphot",
+                        "l1", "l2", *JETS, "ph1", "ph2", "met",
+                        "deltaR", "mT", *_SAFE_BUILTINS})
+
+
+def unknown_names(expr: str) -> list[str]:
+    """Names in a selection or observable expression that no event defines."""
+    tree = ast.parse(preprocess_hep_expr(expr).strip(), mode="eval")
+    return sorted({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} - EXPR_NAMES)
 
 
 class _P:
@@ -277,8 +297,7 @@ _CACHE_KEYS = [
     "nlep", "nel", "nmu", "njets", "nphot", "nbjets", "weight",
     "l1_pt", "l1_eta", "l1_phi", "l1_e", "l1_d0", "l1_z0", "l1_charge", "l1_flavour",
     "l2_pt", "l2_eta", "l2_phi", "l2_e", "l2_d0", "l2_z0", "l2_charge", "l2_flavour",
-    "j1_pt", "j1_eta", "j1_phi", "j1_e", "j1_btag",
-    "j2_pt", "j2_eta", "j2_phi", "j2_e", "j2_btag",
+    *(k for keys in _JET_KEYS for k in keys),
     "ph1_pt", "ph1_eta", "ph1_phi", "ph1_e",
     "ph2_pt", "ph2_eta", "ph2_phi", "ph2_e",
     "met_pt", "met_phi", "met_eta", "met_e",
@@ -286,7 +305,7 @@ _CACHE_KEYS = [
 
 # Part of every selection-cache key: bump when the event content written to the
 # caches changes, so caches built by an older version are not reused.
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
 _INIT_CAP = 4096
 
@@ -309,7 +328,8 @@ def _grow_acc(acc: dict):
 
 
 def _append_event(acc, nlep, nel, nmu, njets, nphot, nbjets,
-                  l1, l2, j1, j2, ph1, ph2, met, w):
+                  l1, l2, jets, ph1, ph2, met, w):
+    """Append one event; jets holds one object per name in JETS (_P() if absent)."""
     i = acc["_n"]
     if i == acc["_cap"]:
         _grow_acc(acc)
@@ -324,12 +344,9 @@ def _append_event(acc, nlep, nel, nmu, njets, nphot, nbjets,
     acc["l2_phi"][i] = l2.phi;     acc["l2_e"][i] = l2.e
     acc["l2_d0"][i] = l2.d0;       acc["l2_z0"][i] = l2.z0
     acc["l2_charge"][i] = l2.charge; acc["l2_flavour"][i] = l2.flavour
-    acc["j1_pt"][i] = j1.pt;   acc["j1_eta"][i] = j1.eta
-    acc["j1_phi"][i] = j1.phi; acc["j1_e"][i] = j1.e
-    acc["j1_btag"][i] = j1.btag
-    acc["j2_pt"][i] = j2.pt;   acc["j2_eta"][i] = j2.eta
-    acc["j2_phi"][i] = j2.phi; acc["j2_e"][i] = j2.e
-    acc["j2_btag"][i] = j2.btag
+    for keys, jet in zip(_JET_KEYS, jets):
+        for k, c in zip(keys, _JET_COLS):
+            acc[k][i] = getattr(jet, c)
     acc["ph1_pt"][i] = ph1.pt;  acc["ph1_eta"][i] = ph1.eta
     acc["ph1_phi"][i] = ph1.phi; acc["ph1_e"][i] = ph1.e
     acc["ph2_pt"][i] = ph2.pt;  acc["ph2_eta"][i] = ph2.eta
@@ -372,7 +389,7 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
             "nmu":  data["nmu"],  "njets": data["njets"],
             "nphot": nphot_arr,
             "l1": _ArrayProxy("l1", data), "l2": _ArrayProxy("l2", data),
-            "j1": _ArrayProxy("j1", data), "j2": _ArrayProxy("j2", data),
+            **{j: _ArrayProxy(j, data) for j in JETS},
             "ph1": _ArrayProxy("ph1", data), "ph2": _ArrayProxy("ph2", data),
             "met": _MetProxy(data),
             "deltaR": _delta_r_vec, "mT": _mT_vec,
@@ -405,8 +422,7 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
         try:
             l1  = _obj_from_cache(data, i, "l1",  ["eta", "phi", "e", "d0", "z0", "charge", "flavour"])
             l2  = _obj_from_cache(data, i, "l2",  ["eta", "phi", "e", "d0", "z0", "charge", "flavour"])
-            j1  = _obj_from_cache(data, i, "j1",  ["eta", "phi", "e", "btag"])
-            j2  = _obj_from_cache(data, i, "j2",  ["eta", "phi", "e", "btag"])
+            jets = [_obj_from_cache(data, i, j, ["eta", "phi", "e", "btag"]) for j in JETS]
             ph1 = (_obj_from_cache(data, i, "ph1", ["eta", "phi", "e"])
                    if "ph1_pt" in data else _NULL)
             ph2 = (_obj_from_cache(data, i, "ph2", ["eta", "phi", "e"])
@@ -416,7 +432,7 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
                 "nlep": int(data["nlep"][i]), "nel": int(data["nel"][i]),
                 "nmu":  int(data["nmu"][i]),  "njets": int(data["njets"][i]),
                 "nphot": int(data["nphot"][i]) if "nphot" in data else 0,
-                "l1": l1, "l2": l2, "j1": j1, "j2": j2,
+                "l1": l1, "l2": l2, **dict(zip(JETS, jets)),
                 "ph1": ph1, "ph2": ph2, "met": met,
                 "deltaR": _delta_r, "mT": _mT,
             }
@@ -441,7 +457,7 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
                           int(data["njets"][i]),
                           int(data["nphot"][i]) if "nphot" in data else 0,
                           _nbjets,
-                          l1, l2, j1, j2, ph1, ph2, met, float(data["weight"][i]))
+                          l1, l2, jets, ph1, ph2, met, float(data["weight"][i]))
         except Exception:
             continue
 
@@ -465,6 +481,8 @@ def _met_from_cache(data, i) -> _P:
 
 def _obj_from_cache(data, i, prefix, keys, extra=None) -> _P:
     """Reconstruct a _P physics object from a loaded .npz cache."""
+    if f"{prefix}_pt" not in data:
+        return _P()
     pt = float(data[f"{prefix}_pt"][i])
     if pt <= -900:
         return _P()
@@ -507,7 +525,7 @@ def fill_histogram_from_cache(cache_file: str, outHist, observable_target: str,
             "nmu":  data["nmu"],  "njets": data["njets"],
             "nphot": data["nphot"] if "nphot" in data else np.zeros(n, dtype=np.float32),
             "l1": _ArrayProxy("l1", data), "l2": _ArrayProxy("l2", data),
-            "j1": _ArrayProxy("j1", data), "j2": _ArrayProxy("j2", data),
+            **{j: _ArrayProxy(j, data) for j in JETS},
             "ph1": _ArrayProxy("ph1", data), "ph2": _ArrayProxy("ph2", data),
             "met": _MetProxy(data),
             "deltaR": _delta_r_vec, "mT": _mT_vec,
@@ -559,8 +577,7 @@ def fill_histogram_from_cache(cache_file: str, outHist, observable_target: str,
         try:
             l1 = _obj_from_cache(data, i, "l1", ["eta", "phi", "e", "d0", "z0", "charge", "flavour"])
             l2 = _obj_from_cache(data, i, "l2", ["eta", "phi", "e", "d0", "z0", "charge", "flavour"])
-            j1 = _obj_from_cache(data, i, "j1", ["eta", "phi", "e", "btag"])
-            j2 = _obj_from_cache(data, i, "j2", ["eta", "phi", "e", "btag"])
+            jets = [_obj_from_cache(data, i, j, ["eta", "phi", "e", "btag"]) for j in JETS]
             ph1 = _obj_from_cache(data, i, "ph1", ["eta", "phi", "e"]) if "ph1_pt" in data else _P()
             ph2 = _obj_from_cache(data, i, "ph2", ["eta", "phi", "e"]) if "ph2_pt" in data else _P()
             met = _met_from_cache(data, i)
@@ -568,7 +585,7 @@ def fill_histogram_from_cache(cache_file: str, outHist, observable_target: str,
                 "nlep": int(data["nlep"][i]), "nel": int(data["nel"][i]),
                 "nmu":  int(data["nmu"][i]),  "njets": int(data["njets"][i]),
                 "nphot": int(data["nphot"][i]) if "nphot" in data else 0,
-                "l1": l1, "l2": l2, "j1": j1, "j2": j2,
+                "l1": l1, "l2": l2, **dict(zip(JETS, jets)),
                 "ph1": ph1, "ph2": ph2, "met": met,
                 "deltaR": _delta_r, "mT": _mT,
             }
@@ -748,8 +765,8 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
             # ── Physics objects ──────────────────────────────────────────
             l1  = _make_lepton(leptons[0])  if len(leptons) >= 1 else _NULL
             l2  = _make_lepton(leptons[1])  if len(leptons) >= 2 else _NULL
-            j1  = _make_jet(jets[0])        if len(jets)    >= 1 else _NULL
-            j2  = _make_jet(jets[1])        if len(jets)    >= 2 else _NULL
+            jet_objs = [_make_jet(jets[k]) if len(jets) > k else _NULL
+                        for k in range(len(JETS))]
             ph1 = _make_photon(photons[0])  if len(photons) >= 1 else _NULL
             ph2 = _make_photon(photons[1])  if len(photons) >= 2 else _NULL
             if (nphot == 1 and nlep == 0 and njets == 0
@@ -767,7 +784,7 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
 
             local_vars = {
                 "nlep": nlep, "nel": nel, "nmu": nmu, "njets": njets, "nphot": nphot,
-                "l1": l1, "l2": l2, "j1": j1, "j2": j2,
+                "l1": l1, "l2": l2, **dict(zip(JETS, jet_objs)),
                 "ph1": ph1, "ph2": ph2, "met": met,
                 "deltaR": _delta_r, "mT": _mT,
             }
@@ -790,7 +807,7 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
             # ── Event passes all cuts — accumulate for cache ─────────────
             if cache_acc is not None:
                 _append_event(cache_acc, nlep, nel, nmu, njets, nphot, nbjets,
-                              l1, l2, j1, j2, ph1, ph2, met, w)
+                              l1, l2, jet_objs, ph1, ph2, met, w)
 
             # ── Observable evaluation ────────────────────────────────────
             if outHist is not None and observable_target:

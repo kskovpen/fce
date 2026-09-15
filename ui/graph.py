@@ -13,6 +13,8 @@ SEL_ALL_VARS = [
     "l2.pt", "l2.eta", "l2.phi", "l2.e", "l2.d0", "l2.z0", "l2.charge", "l2.flavour", "l2.p4",
     "j1.pt", "j1.eta", "j1.phi", "j1.e", "j1.btag", "j1.p4",
     "j2.pt", "j2.eta", "j2.phi", "j2.e", "j2.btag", "j2.p4",
+    "j3.pt", "j3.eta", "j3.phi", "j3.e", "j3.btag", "j3.p4",
+    "j4.pt", "j4.eta", "j4.phi", "j4.e", "j4.btag", "j4.p4",
     "ph1.pt", "ph1.eta", "ph1.phi", "ph1.e", "ph1.p4",
     "ph2.pt", "ph2.eta", "ph2.phi", "ph2.e", "ph2.p4",
     "met.pt", "met.phi",
@@ -39,6 +41,8 @@ _OBJ_VARS = {
     "l2":  ["pt", "eta", "phi", "e", "d0", "z0"],
     "j1":  ["pt", "eta", "phi", "e", "btag"],
     "j2":  ["pt", "eta", "phi", "e", "btag"],
+    "j3":  ["pt", "eta", "phi", "e", "btag"],
+    "j4":  ["pt", "eta", "phi", "e", "btag"],
     "ph1": ["pt", "eta", "phi", "e"],
     "ph2": ["pt", "eta", "phi", "e"],
     "met": ["pt", "phi"],
@@ -52,6 +56,7 @@ _OBS_ROW_COUNT: dict[int, int] = {}  # nid -> current number of term rows
 _OBJ_LATEX = {
     "l1":  r"l_1",       "l2":  r"l_2",
     "j1":  r"J_1",       "j2":  r"J_2",
+    "j3":  r"J_3",       "j4":  r"J_4",
     "ph1": r"\gamma_1",  "ph2": r"\gamma_2",
     "met": r"E_T^{miss}",
 }
@@ -80,6 +85,8 @@ _EXPR_TOOLTIP = (
     "             l2.pt  l2.eta  l2.phi  l2.e  l2.d0  l2.z0  l2.p4\n"
     "  Jets    :  j1.pt  j1.eta  j1.phi  j1.e  j1.btag  j1.p4\n"
     "             j2.pt  j2.eta  j2.phi  j2.e  j2.btag  j2.p4\n"
+    "             j3.pt  j3.eta  j3.phi  j3.e  j3.btag  j3.p4\n"
+    "             j4.pt  j4.eta  j4.phi  j4.e  j4.btag  j4.p4\n"
     "  Photons :  ph1.pt  ph1.eta  ph1.phi  ph1.e  ph1.p4\n"
     "             ph2.pt  ph2.eta  ph2.phi  ph2.e  ph2.p4\n"
     "  Missing :  met.pt  met.eta  met.phi  met.e  met.p4\n"
@@ -764,7 +771,11 @@ def apply_node_runtime_states(active_nodes: set, completed_nodes: set,
 
 
 def validate_node_expressions() -> list[tuple[int, str]]:
-    """Check syntax of all expression fields. Returns list of (nid, error_msg)."""
+    """Check syntax and variable names of all expression fields.
+
+    Returns a list of (nid, error_msg). An unknown name (j5, a typo) would
+    otherwise fail on every event, and every event would silently vanish.
+    """
     errors = []
     for nid, ntype in REGISTRY.nodes.items():
         if ntype == "Selection":
@@ -779,11 +790,15 @@ def validate_node_expressions() -> list[tuple[int, str]]:
         if not expr:
             errors.append((nid, "Expression is empty."))
             continue
+        from engine.path_filter import preprocess_hep_expr, unknown_names
         try:
-            from engine.path_filter import preprocess_hep_expr
             compile(preprocess_hep_expr(expr), "<expr>", "eval")
         except SyntaxError as e:
             errors.append((nid, f"Syntax error: {e.msg}\n  {expr}"))
+            continue
+        unknown = unknown_names(expr)
+        if unknown:
+            errors.append((nid, f"Unknown variable: {', '.join(unknown)}\n  {expr}"))
     return errors
 
 
