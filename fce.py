@@ -25,7 +25,7 @@ from ui.graph import (link_callback, delink_callback, create_node,
                       show_delete_unconnected_confirm)
 from ui.state import REGISTRY
 from ui.components import (trigger_analysis_pipeline, trigger_dataset_download,
-                           confirm_redownload, MAX_HIST_TEXTURES,
+                           confirm_redownload, ensure_plot_texture,
                            save_discovery_process_name, open_png_export_dialog)
 from ui.zoom import auto_zoom, font_px
 from ui.zoom_ui import start_zoom, center_window
@@ -59,14 +59,10 @@ except OSError:
 dpg.create_context()
 
 # ── Textures ─────────────────────────────────────────────────────────────────
-with dpg.texture_registry():
-    empty_buffer = [0.1, 0.1, 0.1, 1.0] * (1272 * 908)
-    for _ti in range(MAX_HIST_TEXTURES):
-        dpg.add_dynamic_texture(
-            width=1272, height=908,
-            default_value=empty_buffer,
-            tag=f"plot_texture_buffer_{_ti}",
-        )
+with dpg.texture_registry(tag="texture_registry"):
+    # Only the first plot texture up front: the empty canvas shows it before any
+    # run. The rest are added as plots appear (ensure_plot_texture).
+    ensure_plot_texture(0)
     dpg.add_dynamic_texture(
         width=1272, height=1100,
         default_value=[0.1, 0.1, 0.1, 1.0] * (1272 * 1100),

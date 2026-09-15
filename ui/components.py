@@ -18,7 +18,10 @@ safe_set_state = update_run_state
 FCE_DIR = get_fce_home()
 CURRENT_WORKER = None
 
-MAX_HIST_TEXTURES = 8
+# Plot textures are 1272x908 RGBA floats, 18.5 MB each, so they are created as
+# plots appear (ensure_plot_texture) instead of all at startup.
+MAX_HIST_TEXTURES = 32
+PLOT_TEXTURE_SIZE = (1272, 908)
 
 # Names students gave discovered processes: {(energy, sample): name}. Keyed by
 # process, never by histogram slot: keyed by slot, a name followed whatever that
@@ -255,13 +258,24 @@ from PIL import Image
 import numpy as np
 
 
+def ensure_plot_texture(i: int) -> str:
+    """Tag of plot i's texture, created in "texture_registry" on first use."""
+    tag = f"plot_texture_buffer_{i}"
+    if not dpg.does_item_exist(tag):
+        w, h = PLOT_TEXTURE_SIZE
+        dpg.add_dynamic_texture(width=w, height=h,
+                                default_value=[0.1, 0.1, 0.1, 1.0] * (w * h),
+                                tag=tag, parent="texture_registry")
+    return tag
+
+
 def _load_png_to_texture(png_path: str, texture_tag: str) -> bool:
     """Load a PNG into a DPG dynamic texture. Returns True on success."""
     if not os.path.exists(png_path):
         return False
     try:
         img = Image.open(png_path).convert("RGBA")
-        img_resized = img.resize((1272, 908), Image.Resampling.LANCZOS)
+        img_resized = img.resize(PLOT_TEXTURE_SIZE, Image.Resampling.LANCZOS)
         pixel_array = np.array(img_resized, dtype=np.float32) / 255.0
         if dpg.does_item_exist(texture_tag):
             dpg.set_value(texture_tag, pixel_array.ravel().tolist())
@@ -355,7 +369,8 @@ def refresh_ui_canvas(selections_info: list | None = None,
         if i >= MAX_HIST_TEXTURES:
             continue
         png_path = os.path.join(FCE_DIR, f"hist_{i}.png")
-        if _load_png_to_texture(png_path, f"plot_texture_buffer_{i}"):
+        # The texture must exist before the image that shows it is added.
+        if os.path.exists(png_path) and _load_png_to_texture(png_path, ensure_plot_texture(i)):
             loaded.add(i)
 
     if not loaded:
