@@ -6,7 +6,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.path_filter import (
-    _delta_r, _P4Proxy, _ArrayProxy, _delta_r_vec, _make_met, _missing_energy,
+    _delta_r, _P4Proxy, _ArrayProxy, _MetProxy, _delta_r_vec, _make_met, _missing_energy,
     make_cache_acc, save_cache, _CACHE_KEYS,
     _single_photon_met, filter_raw_event_data,
 )
@@ -280,3 +280,27 @@ def test_dilepton_quantities_of_a_one_lepton_event_are_nan():
         vals = getattr(ll, name)
         assert np.isfinite(vals[0]), name
         assert np.isnan(vals[1]), name
+
+
+def test_missing_energy_is_never_below_the_missing_momentum():
+    """E_miss = sqrt(s) - E_vis can come out negative; the missing system cannot."""
+    p = 10.0 * math.cosh(0.5)
+    met = _make_met(10.0, 0.0, 0.5, -3.0)
+    assert abs(met.e - p) < 1e-9
+    assert abs(met.p4.mass) < 1e-4                  # raised to massless
+
+    data = {
+        "weight": np.ones(3),
+        "met_pt": np.array([10.0, 10.0, -999.0]),
+        "met_eta": np.array([0.5, 0.5, -999.0]),
+        "met_phi": np.zeros(3),
+        "met_e": np.array([-3.0, 50.0, -999.0]),
+    }
+    met = _MetProxy(data)
+    assert abs(met.e[0] - p) < 1e-9                 # raised to |p|
+    assert met.e[1] == 50.0                         # already physical: untouched
+    assert met.e[2] == -999.0                       # no MET stored: sentinel kept
+    mass = met.p4.mass
+    assert abs(mass[0]) < 1e-4
+    assert abs(mass[1] - math.sqrt(50.0**2 - p**2)) < 1e-9
+    assert np.isnan(mass[2])

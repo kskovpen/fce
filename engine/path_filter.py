@@ -138,7 +138,7 @@ class _ArrayProxy:
             pt  = d[f"{pfx}_pt"].astype(np.float64)
             eta = d[f"{pfx}_eta"].astype(np.float64)
             phi = d[f"{pfx}_phi"].astype(np.float64)
-            e   = d[f"{pfx}_e"].astype(np.float64)
+            e   = np.asarray(self.e, dtype=np.float64)
             # An object an event lacks (l2 in a one-lepton event), or a missing
             # energy the cache could not provide, is stored as -999. Built into
             # a 4-vector, those sentinels give finite nonsense (the di-lepton
@@ -153,6 +153,28 @@ class _ArrayProxy:
                 e, pt * np.cos(phi), pt * np.sin(phi), pt * np.sinh(eta)
             )
         return self._p4
+
+
+class _MetProxy(_ArrayProxy):
+    """Missing momentum, whose energy is never below |p_miss|.
+
+    E_miss = sqrt(s) - E_visible falls below zero whenever the visible energy
+    is measured above sqrt(s), and below |p_miss| far more often (15-72% of
+    events in some samples), which would make met.p4 spacelike. An invisible
+    system has m^2 >= 0, so its energy is raised to |p_miss|: the missing
+    system is at least massless. Done on read, so caches written before this
+    are corrected too; sentinels are left alone so p4 stays NaN there.
+    """
+
+    def __init__(self, data):
+        super().__init__("met", data)
+
+    @property
+    def e(self):
+        e, pt, eta = (self.__getattr__(k) for k in ("e", "pt", "eta"))
+        ok = (e > -900.0) & (pt > -900.0) & (eta > -900.0)
+        p = pt * np.cosh(np.where(ok, eta, 0.0))
+        return np.where(ok, np.maximum(e, p), e)
 
 
 def _delta_r_vec(a, b):
@@ -208,6 +230,7 @@ def _make_met(pt, phi, eta=None, e=None) -> _P:
     """
     if eta is None or e is None:
         return _P(pt=pt, phi=phi)
+    e = max(e, pt * math.cosh(eta))      # never spacelike: see _MetProxy
     return _P(pt=pt, phi=phi, eta=eta, e=e,
               p4=vector.obj(pt=pt, eta=eta, phi=phi, e=e))
 
@@ -351,7 +374,7 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
             "l1": _ArrayProxy("l1", data), "l2": _ArrayProxy("l2", data),
             "j1": _ArrayProxy("j1", data), "j2": _ArrayProxy("j2", data),
             "ph1": _ArrayProxy("ph1", data), "ph2": _ArrayProxy("ph2", data),
-            "met": _ArrayProxy("met", data),
+            "met": _MetProxy(data),
             "deltaR": _delta_r_vec, "mT": _mT_vec,
         }
         mask = np.ones(n, dtype=bool)
@@ -486,7 +509,7 @@ def fill_histogram_from_cache(cache_file: str, outHist, observable_target: str,
             "l1": _ArrayProxy("l1", data), "l2": _ArrayProxy("l2", data),
             "j1": _ArrayProxy("j1", data), "j2": _ArrayProxy("j2", data),
             "ph1": _ArrayProxy("ph1", data), "ph2": _ArrayProxy("ph2", data),
-            "met": _ArrayProxy("met", data),
+            "met": _MetProxy(data),
             "deltaR": _delta_r_vec, "mT": _mT_vec,
         }
         vals = eval(observable_target, {"__builtins__": _SAFE_BUILTINS}, vec_vars)
