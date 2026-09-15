@@ -110,7 +110,8 @@ class _P4Proxy:
         p  = np.sqrt(self._px**2 + self._py**2 + self._pz**2)
         ct = np.where(p > 1e-10, self._pz / p, 0.0)
         ct = np.clip(ct, -1.0 + 1e-10, 1.0 - 1e-10)
-        return -0.5 * np.log((1.0 - ct) / (1.0 + ct))
+        # p > 1e-10 is False for NaN, which would give a missing object eta = 0.
+        return np.where(np.isnan(p), np.nan, -0.5 * np.log((1.0 - ct) / (1.0 + ct)))
 
     def deltaR(self, other):
         deta = self.eta - other.eta
@@ -138,14 +139,16 @@ class _ArrayProxy:
             eta = d[f"{pfx}_eta"].astype(np.float64)
             phi = d[f"{pfx}_phi"].astype(np.float64)
             e   = d[f"{pfx}_e"].astype(np.float64)
-            # A sentinel energy beside a valid eta would yield a finite,
-            # plausible-looking mass that the downstream > -900 and isfinite
-            # filters cannot catch, so hand such a cache to the per-event path.
-            # Not an AttributeError: raised inside a property, that would fall
-            # through to __getattr__ below and quietly return the sentinel array.
-            if np.any((e <= -900.0) & (np.abs(eta) < 900.0)):
-                raise ValueError(
-                    f"{pfx}.p4 is unavailable for some events in this cache")
+            # An object an event lacks (l2 in a one-lepton event), or a missing
+            # energy the cache could not provide, is stored as -999. Built into
+            # a 4-vector, those sentinels give finite nonsense (the di-lepton
+            # mass of a one-lepton event comes out 0) that the isfinite and
+            # > -900 filters downstream cannot catch. NaN carries through any
+            # arithmetic, so such events drop out of histograms and fail cuts,
+            # as on the per-event path, where the expression raises for them.
+            absent = (pt <= -900.0) | (eta <= -900.0) | (phi <= -900.0) | (e <= -900.0)
+            if absent.any():
+                pt, eta, phi, e = (np.where(absent, np.nan, x) for x in (pt, eta, phi, e))
             self.__dict__["_p4"] = _P4Proxy(
                 e, pt * np.cos(phi), pt * np.sin(phi), pt * np.sinh(eta)
             )
@@ -368,6 +371,10 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
         pass
 
     # ── Per-event fallback (handles 4-vector expressions the vectorized path can't) ─
+    # Decompress each column once. An .npz is a zip (mmap_mode does not apply),
+    # so data[key] inflates the whole column on every access: 4.7 ms per read,
+    # which made this loop quadratic in the number of events.
+    data = {k: data[k] for k in data.files}
     acc = make_cache_acc()
     _NULL = _P()
 
@@ -505,6 +512,10 @@ def fill_histogram_from_cache(cache_file: str, outHist, observable_target: str,
         pass
 
     # ── Per-event fallback (handles any expression the vectorized path can't) ─
+    # Decompress each column once. An .npz is a zip (mmap_mode does not apply),
+    # so data[key] inflates the whole column on every access: 4.7 ms per read,
+    # which made this loop quadratic in the number of events.
+    data = {k: data[k] for k in data.files}
     # OPT-2: pre-compile the observable expression once outside the event loop
     try:
         observable_code = compile(observable_target, '<obs>', 'eval')

@@ -252,19 +252,31 @@ def test_lepton_plus_met_invariant_mass():
     assert abs(total.mass - 80.0) < 1e-9               # so m = sum of energies
 
 
-def test_array_proxy_p4_refuses_a_sentinel_energy():
-    """A cache with no missing energy must not yield a plausible-looking mass."""
+def test_array_proxy_p4_is_nan_where_unavailable():
+    """A missing energy or object must drop out, not give a plausible value."""
     data = {
-        "weight": np.array([1.0, 1.0]),
-        "met_pt": np.array([25.0, 25.0]),
-        "met_eta": np.array([0.8, 0.8]),
-        "met_phi": np.array([1.2, 1.2]),
-        "met_e": np.array([40.0, -999.0]),
+        "weight": np.array([1.0, 1.0, 1.0]),
+        "met_pt": np.array([25.0, 25.0, -999.0]),
+        "met_eta": np.array([0.8, 0.8, -999.0]),
+        "met_phi": np.array([1.2, 1.2, -999.0]),
+        "met_e": np.array([40.0, -999.0, -999.0]),
     }
-    try:
-        _ArrayProxy("met", data).p4
-    except ValueError:
-        return
-    # An AttributeError here would be swallowed by __getattr__ and handed back
-    # as a -999 array, which is exactly the failure this guards against.
-    raise AssertionError("expected ValueError for the sentinel energy")
+    p4 = _ArrayProxy("met", data).p4
+    assert np.isfinite(p4.mass[0])
+    assert np.isnan(p4.mass[1])      # energy unknown
+    assert np.isnan(p4.mass[2])      # no missing momentum stored at all
+
+
+def test_dilepton_quantities_of_a_one_lepton_event_are_nan():
+    """(l1.p4 + l2.p4) without an l2 used to give mass 0 and energy E1 - 999."""
+    lep = {"pt": 30.0, "eta": 0.5, "phi": 0.3, "e": 40.0}
+    data = {"weight": np.ones(2)}
+    for k, v in lep.items():
+        data[f"l1_{k}"] = np.array([v, v])
+    for k, v in {"pt": 20.0, "eta": -0.2, "phi": 2.0, "e": 25.0}.items():
+        data[f"l2_{k}"] = np.array([v, -999.0])
+    ll = _ArrayProxy("l1", data).p4 + _ArrayProxy("l2", data).p4
+    for name in ("mass", "e", "pt", "eta", "phi"):
+        vals = getattr(ll, name)
+        assert np.isfinite(vals[0]), name
+        assert np.isnan(vals[1]), name
