@@ -73,7 +73,9 @@ _PAGES = [
         "  -  Bins: number of histogram bins\n"
         "  -  Min / Max Range: the x-axis range of the histogram\n"
         "  -  Fit Signal: optional signal sample for a statistical fit\n"
-        "     (returns signal strength mu and discovery significance Z)\n\n"
+        "     (returns signal strength mu and discovery significance Z).\n"
+        "     'New Physics' tests the data for an excess over all samples\n"
+        "     (returns the number of excess events and its significance Z)\n\n"
         "Multiple Histogram nodes can share one Observable, each producing\n"
         "a separate plot labelled by the node's custom name.",
         "node_4", "node",
@@ -135,7 +137,12 @@ _PAGES = [
         "If a Fit Signal is selected, FCE Studio runs a pyhf-based fit and\n"
         "reports signal strength mu and discovery significance Z in a\n"
         "'Statistical fit' panel that appears above the histogram after\n"
-        "your first successful run with a fit target configured.",
+        "your first successful run with a fit target configured.\n\n"
+        "'New Physics' needs no signal sample: it compares the data in the\n"
+        "histogram range with the sum of all samples and reports how many\n"
+        "events none of them describes, with the same systematics and\n"
+        "significance Z as a sample fit. Tighten the selection and the range\n"
+        "around an excess to see whether its significance grows.",
         None, None,
     ),
 ]

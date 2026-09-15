@@ -89,11 +89,16 @@ def _show_next_discovery() -> None:
     detail_lines = [f"Observable: {x_label}"]
     if sel_label:
         detail_lines.append(f"Selection:  {sel_label}")
-    detail_lines.append(f"Signal strength (mu): {res['mu']}")
+    if res.get("excess"):
+        detail_lines.append(f"Excess over all samples: {res['mu']} events")
+    else:
+        detail_lines.append(f"Signal strength (mu): {res['mu']}")
 
     if dpg.does_item_exist("discovery_title_text"):
+        what = ("An excess over all known processes" if res.get("excess")
+                else "The process")
         dpg.set_value("discovery_title_text",
-                      "Discovery! The process has been observed with "
+                      f"Discovery! {what} has been observed with "
                       f"{res['sig']} sigma significance.")
     if dpg.does_item_exist("discovery_detail_text"):
         dpg.set_value("discovery_detail_text", "\n".join(detail_lines))
@@ -279,10 +284,9 @@ def _add_fit_label(plot_idx: int, fit_results: dict, parent: str,
         dpg.add_text(f"Statistical Fit: Histogram {plot_idx + 1}", parent=parent)
     else:
         dpg.add_text("Statistical Fit", parent=parent)
-    dpg.add_text(
-        f"  Signal Strength (mu): {res['mu']}    Significance: {res['sig']} sigma",
-        parent=parent,
-    )
+    measured = (f"Excess over all samples: {res['mu']} events" if res.get("excess")
+                else f"Signal Strength (mu): {res['mu']}")
+    dpg.add_text(f"  {measured}    Significance: {res['sig']} sigma", parent=parent)
     dpg.add_spacer(height=2, parent=parent)
 
 

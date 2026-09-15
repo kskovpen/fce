@@ -88,7 +88,7 @@ def execute_analysis(cfg, _unused):
             if hcfg.get("target", "None") in ("None", None, ""):
                 continue
             try:
-                from engine.fitter import run_fit
+                from engine.fitter import NEW_PHYSICS, run_fit
                 fit_cfg = dict(cfg)
                 fit_cfg.update(hcfg)
                 mu, sig = run_fit(fit_cfg, samples, en,
@@ -98,6 +98,8 @@ def execute_analysis(cfg, _unused):
                     fit_results[plot_idx] = {
                         "mu":             mu,
                         "sig":            sig,
+                        # For New Physics, mu is the number of excess events.
+                        "excess":         hcfg.get("target") == NEW_PHYSICS,
                         "node_name":      hcfg.get("node_name", ""),
                         "x_label":        hcfg.get("x_label", ""),
                         "sel_custom_name": hcfg.get("sel_custom_name", ""),

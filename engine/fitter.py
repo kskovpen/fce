@@ -18,6 +18,107 @@ def _counting_significance(n_tot: float, s_tot: float) -> float:
     return min(float(np.sqrt(2.0 * n_tot)) if n_tot > 0 else 0.0, _SIG_CAP)
 
 
+# Fit target for a signal that is in the data but that none of the samples
+# describes: there is no template to fit, so it is tested as an excess.
+NEW_PHYSICS = "New Physics"
+
+
+def _lumi_modifier() -> dict:
+    return {"name": "lumi", "type": "normsys",
+            "data": {"hi": 1.0 + LUMI_UNC, "lo": max(0.01, 1.0 - LUMI_UNC)}}
+
+
+def _poisson_excess_significance(n: float, b: float) -> float:
+    """Asymptotic discovery significance of n observed on b expected, b exact."""
+    if b <= 0 or n <= b:
+        return 0.0
+    return min(float(np.sqrt(2.0 * (n * np.log(n / b) - (n - b)))), _SIG_CAP)
+
+
+def _fit_and_test(spec: dict) -> tuple[float, float]:
+    """Fit a workspace spec; return (mu_hat, discovery significance from q0).
+
+    The spec carries observations and a measurement, so it has to go through
+    pyhf.Workspace: pyhf.Model accepts channels and parameters only and rejects
+    anything else. Passing it to pyhf.Model raised on every call, and run_fit's
+    fallback turned each fit into a plain s/sqrt(b) with no systematics.
+    """
+    import pyhf
+    from scipy.stats import norm as _norm
+
+    ws = pyhf.Workspace(spec)
+    model = ws.model()
+    obs_data = ws.data(model)
+
+    _sink = io.StringIO()
+    with warnings.catch_warnings(), contextlib.redirect_stdout(_sink), \
+            contextlib.redirect_stderr(_sink):
+        warnings.simplefilter("ignore")
+        fit_result = pyhf.infer.mle.fit(obs_data, model)
+        mu_fit = float(pyhf.tensorlib.to_numpy(fit_result)[model.config.poi_index])
+        p0 = float(pyhf.infer.hypotest(0.0, obs_data, model, test_stat="q0"))
+
+    if p0 <= 0.0:
+        significance = _SIG_CAP          # p0=0 → beyond numerical range → cap
+    elif p0 >= 1.0:
+        significance = 0.0
+    else:
+        significance = min(float(_norm.isf(p0)), _SIG_CAP)
+    return mu_fit, round(significance, 2)
+
+
+def _excess_fit(bkg_vals, bkg_up, src_ok, data_obs):
+    """Model-independent test for a signal that none of the samples describes.
+
+    With no signal template, the histogram range is one counting region: the
+    data against the sum of every sample, with the same luminosity,
+    MC-statistical and object systematics as a template fit. The signal is a
+    single unit event scaled by mu, so the fitted mu is the number of excess
+    events itself, bounded at zero so that a deficit reads as no signal.
+
+    Returns (excess_events, significance), or (None, None) without data or MC.
+    """
+    if bkg_vals is None or data_obs is None:
+        return None, None
+    n = float(np.sum(data_obs))
+    b = float(np.sum(bkg_vals))
+    if b <= 0:
+        return None, None
+
+    bkg_modifiers = [
+        {"name": "bkg_unc", "type": "shapesys", "data": [max(float(np.sqrt(b)), 0.01)]},
+        _lumi_modifier(),
+    ]
+    for src in SYST_SOURCES:
+        if src_ok[src] and bkg_up[src] is not None:
+            hi = float(np.sum(bkg_up[src]))
+            bkg_modifiers.append({
+                "name": src, "type": "histosys",
+                "data": {"hi_data": [hi], "lo_data": [max(2.0 * b - hi, 0.0)]},
+            })
+
+    spec = {
+        "channels": [{"name": "singlechannel", "samples": [
+            {"name": "excess", "data": [1.0],
+             "modifiers": [{"name": "mu", "type": "normfactor", "data": None}]},
+            {"name": "background", "data": [b], "modifiers": bkg_modifiers},
+        ]}],
+        "observations": [{"name": "singlechannel", "data": [n]}],
+        # The likelihood is flat on the scale of one event, so the fit stays
+        # wherever it starts: start it at the answer, not at pyhf's mu = 1.
+        "measurements": [{"name": "Measurement", "config": {"poi": "mu", "parameters": [
+            {"name": "mu", "bounds": [[0.0, max(10.0, 5.0 * n)]],
+             "inits": [max(n - b, 0.0)]},
+        ]}}],
+        "version": "1.0.0",
+    }
+    try:
+        excess, significance = _fit_and_test(spec)
+    except Exception:
+        return round(max(n - b, 0.0), 1), round(_poisson_excess_significance(n, b), 2)
+    return round(excess, 1), significance
+
+
 def run_fit(cfg, samples, en, hist_idx=0):
     """Run pyhf signal fit. Returns (mu_best, significance) or (None, None)."""
     target = cfg.get("target", "None")
@@ -76,6 +177,9 @@ def run_fit(cfg, samples, en, hist_idx=0):
         except Exception:
             continue
 
+    if target == NEW_PHYSICS:
+        return _excess_fit(bkg_vals, bkg_up, src_ok, data_obs)
+
     if signal_vals is None:
         return None, None
 
@@ -122,14 +226,9 @@ def run_fit(cfg, samples, en, hist_idx=0):
     bkg_unc = [max(float(np.sqrt(b)), 0.01) for b in bkg_nom]
 
     try:
-        import pyhf
-
         # ── Signal modifiers ────────────────────────────────────────────────
         signal_modifiers = [{"name": "mu", "type": "normfactor", "data": None}]
-        lumi_mod = {
-            "name": "lumi", "type": "normsys",
-            "data": {"hi": 1.0 + LUMI_UNC, "lo": max(0.01, 1.0 - LUMI_UNC)},
-        }
+        lumi_mod = _lumi_modifier()
         signal_modifiers.append(lumi_mod)
 
         for src in SYST_SOURCES:
@@ -168,28 +267,8 @@ def run_fit(cfg, samples, en, hist_idx=0):
                               "config": {"poi": "mu", "parameters": []}}],
             "version": "1.0.0",
         }
-        model = pyhf.Model(spec)
-        obs_data = pyhf.tensorlib.astensor(data_obs + model.config.auxdata)
-
-        _sink = io.StringIO()
-        with warnings.catch_warnings(), contextlib.redirect_stdout(_sink), \
-                contextlib.redirect_stderr(_sink):
-            warnings.simplefilter("ignore")
-            fit_result = pyhf.infer.mle.fit(obs_data, model)
-            mu_fit = float(pyhf.tensorlib.to_numpy(fit_result)[model.config.poi_index])
-
-            # Discovery significance (q0 test)
-            p0 = float(pyhf.infer.hypotest(0.0, obs_data, model, test_stat="q0"))
-
-        from scipy.stats import norm as _norm
-        if p0 <= 0.0:
-            significance = _SIG_CAP          # p0=0 → beyond numerical range → cap
-        elif p0 >= 1.0:
-            significance = 0.0
-        else:
-            significance = min(float(_norm.isf(p0)), _SIG_CAP)
-
-        return round(mu_fit, 3), round(significance, 2)
+        mu_fit, significance = _fit_and_test(spec)
+        return round(mu_fit, 3), significance
 
     except Exception:
         # Fallback: simple counting estimate

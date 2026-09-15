@@ -1174,6 +1174,14 @@ def _make_expr_widgets(tag: str, default: str, hint: str,
 # Energy change → update Histogram fit-signal combo
 # ---------------------------------------------------------------------------
 
+def _current_energy() -> str:
+    """Energy selected in the DataSource node, e.g. '160 GeV' (default 91 GeV)."""
+    ds = next((n for n, t in REGISTRY.nodes.items() if t == "DataSource"), None)
+    if ds is not None and dpg.does_item_exist(f"cb_energy_{ds}"):
+        return dpg.get_value(f"cb_energy_{ds}")
+    return "91 GeV"
+
+
 def _on_energy_change(energy_val: str, _ds_nid: int):
     en = energy_val.replace(" GeV", "")
     choices = _FIT_CHOICES.get(en, ["None"])
@@ -1352,9 +1360,11 @@ def _add_node_widgets(node_type: str, nid: int, parent_tag: str):
         )
 
     elif node_type == "Histogram":
-        # Initial choices for default energy 91 GeV
+        # Offer the samples of the energy already selected: _on_energy_change
+        # only updates nodes that exist when the energy changes, so a node
+        # added afterwards would list samples missing at that energy.
         dpg.add_combo(
-            _FIT_CHOICES.get("91", ["None"]),
+            _FIT_CHOICES.get(_current_energy().replace(" GeV", ""), ["None"]),
             label="Fit Signal", tag=f"cb_target_{nid}",
             default_value="None", width=110, parent=parent_tag,
         )
