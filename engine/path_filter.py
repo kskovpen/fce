@@ -16,11 +16,32 @@ def preprocess_hep_expr(expr: str) -> str:
     return expr
 
 
+def _quiet(fn):
+    """A numpy function that keeps quiet about nan/inf results."""
+    def wrapper(x):
+        with np.errstate(all="ignore"):
+            return fn(x)
+    return wrapper
+
+
+def _passes(value) -> bool:
+    """Whether a cut result passes; NaN fails, where bool() would call it True."""
+    if value != value:
+        return False
+    return bool(value)
+
+
 _SAFE_BUILTINS = {
     "abs": abs, "max": max, "min": min, "len": len,
     "float": float, "int": int, "bool": bool,
-    "sqrt": math.sqrt, "cos": math.cos, "sin": math.sin,
-    "tan": math.tan, "pi": math.pi, "exp": math.exp, "log": math.log,
+    # numpy rather than math: these take a scalar or a whole column alike, so an
+    # expression using sqrt() stays on the vectorized path. math.sqrt raises
+    # TypeError on an array, which sent the entire run to the per-event loop.
+    # They return nan where math raised, so nan has to fail a cut (_passes) and
+    # be skipped when filling, on both paths.
+    "sqrt": _quiet(np.sqrt), "cos": _quiet(np.cos), "sin": _quiet(np.sin),
+    "tan": _quiet(np.tan), "pi": math.pi, "exp": _quiet(np.exp),
+    "log": _quiet(np.log),
     "True": True, "False": False, "None": None,
 }
 
@@ -398,8 +419,10 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
         for expr in exprs_to_eval:
             if not expr:
                 continue
-            result = eval(expr, {"__builtins__": _SAFE_BUILTINS}, vec_vars)
-            result = np.asarray(result, dtype=bool).ravel()
+            result = np.asarray(eval(expr, {"__builtins__": _SAFE_BUILTINS}, vec_vars))
+            if result.dtype.kind == "f":
+                result = np.nan_to_num(result, nan=0.0)   # NaN fails the cut
+            result = result.astype(bool).ravel()
             if result.shape[0] != n:
                 raise ValueError("shape mismatch")
             mask &= result
@@ -441,7 +464,8 @@ def filter_selection_cache(parent_cache_path: str, additional_exprs: list,
                 if not expr:
                     continue
                 try:
-                    if not eval(expr, {"__builtins__": _SAFE_BUILTINS}, local_vars):
+                    if not _passes(eval(expr, {"__builtins__": _SAFE_BUILTINS},
+                                        local_vars)):
                         skip = True
                         break
                 except Exception:
@@ -594,7 +618,7 @@ def fill_histogram_from_cache(cache_file: str, outHist, observable_target: str,
             if obs_val is None:
                 continue
             obs_val = float(obs_val)
-            if obs_val <= -900:
+            if not math.isfinite(obs_val) or obs_val <= -900:
                 continue
             ev_w = float(data["weight"][i])
             outHist.h["h"].fill(obs_val, weight=ev_w)
@@ -795,7 +819,8 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
             skip = False
             for k, code in enumerate(compiled_sel_exprs):
                 try:
-                    if not eval(code, {"__builtins__": _SAFE_BUILTINS}, local_vars):
+                    if not _passes(eval(code, {"__builtins__": _SAFE_BUILTINS},
+                                        local_vars)):
                         skip = True; break
                 except Exception:
                     skip = True; break
@@ -816,7 +841,7 @@ def filter_raw_event_data(arrays, nev, cfg, outHist, observable_target,
                     if obs_val is None:
                         continue
                     obs_val = float(obs_val)
-                    if obs_val <= -900:
+                    if not math.isfinite(obs_val) or obs_val <= -900:
                         continue
                     outHist.h["h"].fill(obs_val, weight=w)
                 except Exception:

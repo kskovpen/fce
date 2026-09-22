@@ -362,3 +362,59 @@ def test_unknown_names_are_reported():
     assert unknown_names("j3.pt > -1 && j4.btag > 0.7") == []
     assert unknown_names("(l1.p4 + met.p4).mass > abs(-3) and deltaR(j1, j4) > 0.4") == []
     assert unknown_names("j5.pt > 20 || !lep1") == ["j5", "lep1"]
+
+
+# ---------------------------------------------------------------------------
+# sqrt() and friends on the vectorized path
+# ---------------------------------------------------------------------------
+
+def _boom(*_a, **_k):
+    raise AssertionError("the per-event path was used")
+
+
+def test_sqrt_stays_on_the_vectorized_path(tmp_path, monkeypatch):
+    """math.sqrt rejected arrays, so one sqrt() sent the whole run to the slow loop."""
+    pytest.importorskip("boost_histogram")
+    import engine.path_filter as pf
+    from engine.analytical_loop import hist
+
+    src = _jet_cache(tmp_path)                    # j1.pt = 80 and 70
+    monkeypatch.setattr(pf, "_obj_from_cache", _boom)
+    h = hist()
+    h.create(bins=10, min_val=0, max_val=10)
+    pf.fill_histogram_from_cache(src, h, "sqrt(j1.pt)", with_syst=False)
+    assert h.h["h"].sum() == 2.0                  # 0 would mean the fallback ran
+
+
+def test_passes_treats_nan_as_failure():
+    from engine.path_filter import _passes
+    assert _passes(1.0) and _passes(True)
+    assert not _passes(0.0)
+    assert not _passes(float("nan"))              # bool(nan) is True
+
+
+def test_nan_fails_a_cut_and_is_not_filled(tmp_path):
+    """np.sqrt of a negative is nan where math.sqrt raised and skipped the event."""
+    pytest.importorskip("boost_histogram")
+    from engine.path_filter import filter_selection_cache, fill_histogram_from_cache
+    from engine.analytical_loop import hist
+
+    src = _jet_cache(tmp_path)                    # j1.pt = 80 and 70
+    out = str(tmp_path / "nan.npz")
+    filter_selection_cache(src, ["sqrt(j1.pt - 75)"], out)
+    assert list(np.load(out)["j1_pt"]) == [80.0]  # the 70 event is nan, so it fails
+
+    h = hist()
+    h.create(bins=10, min_val=0, max_val=10)
+    fill_histogram_from_cache(src, h, "sqrt(j1.pt - 75)", with_syst=False)
+    assert h.h["h"].sum() == 1.0                  # nan is not filled
+
+
+def test_the_per_event_path_drops_nan_too(tmp_path):
+    """float() rejects arrays, so this expression runs event by event."""
+    from engine.path_filter import filter_selection_cache
+
+    src = _jet_cache(tmp_path)
+    out = str(tmp_path / "nan_slow.npz")
+    filter_selection_cache(src, ["sqrt(float(j1.pt) - 75)"], out)
+    assert list(np.load(out)["j1_pt"]) == [80.0]
